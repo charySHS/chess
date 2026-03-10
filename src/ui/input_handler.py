@@ -28,17 +28,21 @@ MoveResolver = Callable[[list[Move]], MoveResolution]
 @dataclass
 class InputState:
     selected_square: int | None = None
+    hover_square: int | None = None
     legal_moves: list[Move] = field(default_factory=list)
     drag_origin: int | None = None
     drag_position: tuple[int, int] | None = None
+    mouse_down_position: tuple[int, int] | None = None
     is_dragging: bool = False
     mouse_down: bool = False
 
     def clear(self) -> None:
         self.selected_square = None
+        self.hover_square = None
         self.legal_moves = []
         self.drag_origin = None
         self.drag_position = None
+        self.mouse_down_position = None
         self.is_dragging = False
         self.mouse_down = False
 
@@ -117,9 +121,19 @@ class InputHandler:
             return
 
         square = self.square_at_pixel(mouse_pos)
+        self.state.hover_square = square
         if square is None:
             self.reset_interaction()
             return
+
+        if self.state.selected_square is not None:
+            matching_moves = [move for move in self.state.legal_moves if move.to_square == square]
+            if matching_moves and square != self.state.selected_square:
+                resolution = self.resolve_move_choice(matching_moves)
+                if resolution.move is not None:
+                    self.apply_move(resolution.move)
+                    self.reset_interaction()
+                return
 
         piece = self.piece_at_square(square)
         legal_moves = self.legal_moves_for_square(square)
@@ -131,12 +145,20 @@ class InputHandler:
         self.state.legal_moves = legal_moves
         self.state.drag_origin = square
         self.state.drag_position = mouse_pos
+        self.state.mouse_down_position = mouse_pos
         self.state.is_dragging = False
         self.state.mouse_down = True
 
     def _handle_mouse_motion(self, mouse_pos: tuple[int, int]) -> None:
+        self.state.hover_square = self.square_at_pixel(mouse_pos)
         if self.state.drag_origin is None or not self.state.mouse_down:
             return
+
+        if self.state.mouse_down_position is not None:
+            dx = mouse_pos[0] - self.state.mouse_down_position[0]
+            dy = mouse_pos[1] - self.state.mouse_down_position[1]
+            if dx * dx + dy * dy < 36:
+                return
 
         self.state.is_dragging = True
         self.state.drag_position = mouse_pos
@@ -149,9 +171,11 @@ class InputHandler:
         if self.state.selected_square is None:
             return
 
+        was_dragging = self.state.is_dragging
         target_square = self.square_at_pixel(mouse_pos)
+        self.state.hover_square = target_square
         resolution = MoveResolution()
-        if target_square is not None:
+        if was_dragging and target_square is not None:
             matching_moves = [move for move in self.state.legal_moves if move.to_square == target_square]
             if matching_moves:
                 resolution = self.resolve_move_choice(matching_moves)
@@ -159,10 +183,9 @@ class InputHandler:
         self.state.is_dragging = False
         self.state.drag_position = None
         self.state.drag_origin = None
+        self.state.mouse_down_position = None
         self.state.mouse_down = False
 
         if resolution.move is not None:
             self.apply_move(resolution.move)
             self.reset_interaction()
-        elif not resolution.awaiting_choice:
-            self.state.drag_origin = None

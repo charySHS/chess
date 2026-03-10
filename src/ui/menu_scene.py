@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import sin
 from typing import Callable
 
 import pygame
@@ -40,16 +41,16 @@ class MenuScene:
         self._build_fonts()
 
     def _build_fonts(self) -> None:
-        self.title_font = pygame.font.SysFont("georgia", 54, bold=True)
-        self.subtitle_font = pygame.font.SysFont("georgia", 22)
+        self.title_font = pygame.font.SysFont("georgia", 60, bold=True)
+        self.subtitle_font = pygame.font.SysFont("georgia", 24)
         self.button_font = pygame.font.SysFont("arial", 25, bold=True)
         self.small_font = pygame.font.SysFont("arial", 18)
 
     def _build_actions(self) -> None:
         self.actions = [
-            MenuAction("Play Local Game", self.start_local_game, "Human vs human on one board"),
-            MenuAction("Play vs Engine", None, "Reserved for the NN engine path", enabled=False),
-            MenuAction("Change Theme", self.cycle_theme, "Rotate the active board and panel theme"),
+            MenuAction("Play Local Game", self.start_local_game, "Pass-and-play on one board"),
+            MenuAction("Play vs Engine", None, "Reserved for the upcoming NN engine", enabled=False),
+            MenuAction("Change Theme", self.cycle_theme, "Cycle between glass theme variants"),
             MenuAction("Quit", self.request_quit, "Exit the application"),
         ]
 
@@ -74,65 +75,113 @@ class MenuScene:
                     return
 
     def draw(self) -> None:
-        self.screen.fill(self.theme.background)
-        self._draw_backdrop()
-        self._draw_card()
+        phase = pygame.time.get_ticks() / 1000.0
+        self._draw_gradient_background()
+        self._draw_orbs(phase)
+        self._draw_shell(phase)
         pygame.display.flip()
 
-    def _draw_backdrop(self) -> None:
-        pygame.draw.circle(self.screen, self.theme.side_panel_accent, (150, 120), 170)
-        pygame.draw.circle(self.screen, self.theme.dark_square, (720, 560), 230)
-        pygame.draw.circle(self.screen, self.theme.light_square, (820, 140), 130)
+    def _draw_gradient_background(self) -> None:
+        for y in range(self.theme.window_height):
+            ratio = y / max(1, self.theme.window_height - 1)
+            color = tuple(
+                int(self.theme.background[index] * (1.0 - ratio) + self.theme.background_alt[index] * ratio)
+                for index in range(3)
+            )
+            pygame.draw.line(self.screen, color, (0, y), (self.theme.window_width, y))
 
-    def _draw_card(self) -> None:
-        card_rect = pygame.Rect(96, 92, self.theme.window_width - 192, self.theme.window_height - 184)
-        shadow_rect = card_rect.move(0, 10)
-        shadow = pygame.Surface(shadow_rect.size, pygame.SRCALPHA)
-        shadow.fill((0, 0, 0, 55))
-        self.screen.blit(shadow, shadow_rect.topleft)
-        pygame.draw.rect(self.screen, self.theme.win_banner, card_rect, border_radius=20)
-        pygame.draw.rect(self.screen, self.theme.side_panel_accent, card_rect, width=3, border_radius=20)
+    def _draw_orbs(self, phase: float) -> None:
+        self._draw_orb((152, 120), 210, self.theme.orb_primary, phase * 0.8)
+        self._draw_orb((762, 160), 160, self.theme.orb_secondary, phase * 1.1)
+        self._draw_orb((818, 612), 240, self.theme.orb_tertiary, phase * 0.7)
 
-        title = self.title_font.render("NewChess", True, self.theme.win_banner_text)
+    def _draw_orb(self, center: tuple[int, int], radius: int, color: tuple[int, int, int, int], phase: float) -> None:
+        orb = pygame.Surface((radius * 2, radius * 2), pygame.SRCALPHA)
+        alpha = max(0, min(255, int(color[3] + 10 * sin(phase))))
+        pygame.draw.circle(orb, (color[0], color[1], color[2], alpha), (radius, radius), radius)
+        self.screen.blit(orb, (center[0] - radius, center[1] - radius + int(6 * sin(phase))))
+
+    def _draw_shell(self, phase: float) -> None:
+        card_rect = pygame.Rect(74, 76, self.theme.window_width - 148, self.theme.window_height - 152)
+        self._draw_glass_panel(card_rect, radius=30)
+
+        title = self.title_font.render("NewChess", True, self.theme.heading_text)
         subtitle = self.subtitle_font.render(
-            "Board UI, analysis hooks, and the first NN training foundation.",
+            "A crisp board UI with a liquid glass shell and engine foundations under it.",
             True,
-            self.theme.win_banner_text,
+            self.theme.muted_text,
         )
-        self.screen.blit(title, (card_rect.x + 42, card_rect.y + 36))
-        self.screen.blit(subtitle, (card_rect.x + 44, card_rect.y + 102))
+        self.screen.blit(title, (card_rect.x + 42, card_rect.y + 38))
+        self.screen.blit(subtitle, (card_rect.x + 44, card_rect.y + 110))
 
-        theme_text = self.small_font.render(f"Theme: {self.theme.name.title()}  |  T cycles themes", True, self.theme.win_banner_text)
-        self.screen.blit(theme_text, (card_rect.x + 46, card_rect.y + 150))
+        badge_rect = pygame.Rect(card_rect.x + 44, card_rect.y + 152, 246, 34)
+        self._draw_glass_pill(badge_rect)
+        badge = self.small_font.render(f"Theme {self.theme.name.title()}   |   Press T", True, self.theme.heading_text)
+        self.screen.blit(badge, badge.get_rect(center=badge_rect.center))
 
         self.button_rects = []
-        start_y = card_rect.y + 210
         mouse_pos = pygame.mouse.get_pos()
+        start_y = card_rect.y + 224
         for index, action in enumerate(self.actions):
-            rect = pygame.Rect(card_rect.x + 46, start_y + index * 86, 330, 62)
+            rect = pygame.Rect(card_rect.x + 44, start_y + index * 88, 350, 66)
             self.button_rects.append(rect)
-            hovered = rect.collidepoint(mouse_pos) and action.enabled
-            fill = self.theme.side_panel_background if action.enabled else (110, 110, 110)
-            if hovered:
-                fill = tuple(min(channel + 18, 255) for channel in fill)
-            pygame.draw.rect(self.screen, fill, rect, border_radius=14)
-            pygame.draw.rect(self.screen, self.theme.panel_background, rect, width=2, border_radius=14)
+            self._draw_glass_button(
+                rect,
+                hovered=rect.collidepoint(mouse_pos) and action.enabled,
+                enabled=action.enabled,
+                phase=phase + index * 0.3,
+            )
 
-            label_color = self.theme.heading_text if action.enabled else (215, 215, 215)
-            desc_color = self.theme.muted_text if action.enabled else (225, 225, 225)
-            label = self.button_font.render(action.label, True, label_color)
-            desc = self.small_font.render(action.description, True, desc_color)
-            self.screen.blit(label, (rect.x + 18, rect.y + 9))
-            self.screen.blit(desc, (rect.x + 18, rect.y + 36))
+            title_text = self.button_font.render(action.label, True, self.theme.heading_text if action.enabled else (218, 224, 232))
+            desc_text = self.small_font.render(action.description, True, self.theme.muted_text if action.enabled else (196, 204, 212))
+            self.screen.blit(title_text, (rect.x + 18, rect.y + 11))
+            self.screen.blit(desc_text, (rect.x + 18, rect.y + 40))
 
+        insight_rect = pygame.Rect(card_rect.x + 440, card_rect.y + 212, 364, 314)
+        self._draw_glass_panel(insight_rect, radius=24)
+        section = self.subtitle_font.render("Current Focus", True, self.theme.heading_text)
+        self.screen.blit(section, (insight_rect.x + 24, insight_rect.y + 20))
         notes = [
-            "Promotion picker, captures, move history, and theme rotation are live.",
-            "Engine play is still held back until the NN evaluator is trained.",
-            "Stockfish now feeds the training and move-review pipeline in code.",
+            "Liquid glass menu and in-game panels",
+            "Promotion picker and bounded move history",
+            "Stockfish bridge, NN training scaffold, iterative search",
+            "Engine play slot reserved for the next integration step",
         ]
-        for index, line in enumerate(notes):
-            text = self.small_font.render(line, True, self.theme.win_banner_text)
-            self.screen.blit(text, (card_rect.x + 430, card_rect.y + 248 + index * 30))
+        for index, note in enumerate(notes):
+            dot_rect = pygame.Rect(insight_rect.x + 26, insight_rect.y + 74 + index * 54, 10, 10)
+            pygame.draw.ellipse(self.screen, self.theme.side_panel_accent, dot_rect)
+            text = self.small_font.render(note, True, self.theme.muted_text)
+            self.screen.blit(text, (insight_rect.x + 48, insight_rect.y + 68 + index * 54))
 
-        hint = self.small_font.render("Enter starts local play. Esc quits.", True, self.theme.win_banner_text)
-        self.screen.blit(hint, (card_rect.x + 46, card_rect.bottom - 42))
+        footer = self.small_font.render("Enter starts local play. Esc quits.", True, self.theme.muted_text)
+        self.screen.blit(footer, (card_rect.x + 44, card_rect.bottom - 40))
+
+    def _draw_glass_panel(self, rect: pygame.Rect, radius: int) -> None:
+        shadow = pygame.Surface((rect.width + 22, rect.height + 22), pygame.SRCALPHA)
+        pygame.draw.rect(shadow, self.theme.glass_shadow, shadow.get_rect(), border_radius=radius + 10)
+        self.screen.blit(shadow, (rect.x - 6, rect.y + 12))
+
+        panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(panel, self.theme.glass_fill, panel.get_rect(), border_radius=radius)
+        pygame.draw.rect(panel, self.theme.glass_border, panel.get_rect(), width=2, border_radius=radius)
+        highlight = pygame.Rect(8, 8, rect.width - 16, max(20, rect.height // 5))
+        pygame.draw.rect(panel, self.theme.glass_highlight, highlight, border_radius=radius)
+        self.screen.blit(panel, rect.topleft)
+
+    def _draw_glass_pill(self, rect: pygame.Rect) -> None:
+        panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(panel, self.theme.glass_fill_strong, panel.get_rect(), border_radius=18)
+        pygame.draw.rect(panel, self.theme.glass_border, panel.get_rect(), width=1, border_radius=18)
+        self.screen.blit(panel, rect.topleft)
+
+    def _draw_glass_button(self, rect: pygame.Rect, hovered: bool, enabled: bool, phase: float) -> None:
+        panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+        fill = self.theme.glass_fill_strong if enabled else (255, 255, 255, 28)
+        if hovered:
+            fill = (fill[0], fill[1], fill[2], min(fill[3] + 24, 160))
+        pygame.draw.rect(panel, fill, panel.get_rect(), border_radius=22)
+        pygame.draw.rect(panel, self.theme.glass_border, panel.get_rect(), width=2, border_radius=22)
+        highlight = pygame.Rect(6, 6, rect.width - 12, 18)
+        pulse_alpha = max(0, min(255, int(self.theme.glass_highlight[3] + 14 * sin(phase * 2.2))))
+        pygame.draw.rect(panel, (255, 255, 255, pulse_alpha), highlight, border_radius=16)
+        self.screen.blit(panel, rect.topleft)

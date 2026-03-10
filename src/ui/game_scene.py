@@ -7,6 +7,7 @@ import pygame
 
 from src.chess_core import Board, Move, START_FEN, generate_legal_moves, is_checkmate, is_in_check, is_stalemate
 from src.chess_core.constants import BLACK, EMPTY, WHITE
+from src.engine.search import SearchEngine, SearchResult
 from src.ui.board_renderer import BoardLayout, BoardRenderer, PromotionOverlayState, promotion_option_rects
 from src.ui.input_handler import InputHandler, MoveResolution
 from src.ui.theme import Theme
@@ -47,6 +48,8 @@ class GameScene:
         self.result = GameResult(False, "In Progress")
         self.pending_promotion: PendingPromotion | None = None
         self.move_scroll_offset = 0
+        self.engine = SearchEngine()
+        self.engine_snapshot: SearchResult | None = None
         self.input_handler = InputHandler(
             square_at_pixel=self.square_at_pixel,
             piece_at_square=self.piece_at_square,
@@ -83,6 +86,7 @@ class GameScene:
             input_state=self.input_handler.state,
             status_text=self.status_text(),
             detail_lines=self.detail_lines(),
+            engine_lines=self.engine_lines(),
             captured_by_white=captured_by_white,
             captured_by_black=captured_by_black,
             move_rows=self.move_rows(),
@@ -91,6 +95,7 @@ class GameScene:
             last_move=self.last_move(),
             game_over_message=self.game_over_message(),
             promotion_overlay=self.promotion_overlay_state(),
+            animation_phase=pygame.time.get_ticks() / 1000.0,
         )
         pygame.display.flip()
 
@@ -102,6 +107,7 @@ class GameScene:
         self.legal_moves_by_from = grouped
         self.result = self.evaluate_result()
         self._snap_scroll_to_latest()
+        self._refresh_engine_snapshot()
 
     def reset_board(self) -> None:
         self.board = Board(START_FEN)
@@ -189,6 +195,22 @@ class GameScene:
             lines.append("Position is stable")
         return lines
 
+    def engine_lines(self) -> list[str]:
+        if self.engine_snapshot is None or self.engine_snapshot.best_move is None:
+            return [
+                "Engine: waiting",
+                "Best move: --",
+                "Eval: --",
+                "Depth: --",
+            ]
+
+        return [
+            "Engine: local search",
+            f"Best move: {self.engine_snapshot.best_move.uci()}",
+            f"Eval: {self.engine_snapshot.score:.1f}",
+            f"Depth {self.engine_snapshot.depth}  Nodes {self.engine_snapshot.nodes}",
+        ]
+
     def move_rows(self) -> list[str]:
         rows: list[str] = []
         history = self.board.history
@@ -204,18 +226,24 @@ class GameScene:
             return
 
         row_count = len(self.move_rows())
-        visible_count = 5
+        visible_count = 2
         max_offset = max(0, row_count - visible_count)
         self.move_scroll_offset = max(0, min(self.move_scroll_offset - event.y, max_offset))
 
     def _move_history_rect(self) -> pygame.Rect:
         panel_x, panel_y, panel_width, _ = self.theme.side_panel_rect
-        return pygame.Rect(panel_x + 16, panel_y + 422, panel_width - 32, 126)
+        return pygame.Rect(panel_x + 16, panel_y + 486, panel_width - 32, 76)
 
     def _snap_scroll_to_latest(self) -> None:
         row_count = len(self.move_rows())
-        visible_count = 5
+        visible_count = 2
         self.move_scroll_offset = max(0, row_count - visible_count)
+
+    def _refresh_engine_snapshot(self) -> None:
+        if self.result.is_over or not self.legal_moves:
+            self.engine_snapshot = None
+            return
+        self.engine_snapshot = self.engine.iterative_deepening(self.board, max_depth=2)
 
     def captured_pieces(self) -> tuple[list[str], list[str]]:
         captured_by_white: list[str] = []

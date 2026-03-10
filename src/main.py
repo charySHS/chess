@@ -10,6 +10,7 @@ if __package__ in (None, ""):
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
+from src.config import AppConfig
 from src.ui.app import App
 from src.ui.theme import build_theme
 
@@ -17,7 +18,8 @@ from src.ui.theme import build_theme
 def main() -> None:
     pygame.init()
     try:
-        theme = build_theme("classic")
+        config = AppConfig()
+        theme = build_theme(config.theme_name)
         screen = pygame.display.set_mode((theme.window_width, theme.window_height))
         pygame.display.set_caption("NewChess")
         App(screen, theme).run()

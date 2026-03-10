@@ -33,8 +33,7 @@ tests/                  Core correctness tests
 ## Requirements
 
 - Python 3.14 in the project `.venv`
-- `pygame-ce`
-- `numpy`
+- packages from `requirements.txt`
 - Optional: a local `stockfish` binary on your `PATH`, or set `NEWCHESS_STOCKFISH_PATH`
 
 ## Setup
@@ -43,7 +42,7 @@ Create or reuse the local virtual environment, then install the runtime packages
 
 ```bash
 uv venv .venv
-UV_CACHE_DIR=$(pwd)/.uv-cache uv pip install --python ./.venv/bin/python pygame-ce numpy pytest
+UV_CACHE_DIR=$(pwd)/.uv-cache uv pip install --python ./.venv/bin/python -r requirements.txt
 ```
 
 The repo includes:
@@ -69,7 +68,7 @@ Direct IDE-style entry point also works:
 
 ## Controls
 
-- `Left mouse`: select / drag / move
+- `Left mouse`: click-to-select, click-to-place, or drag-to-move
 - `Esc`: quit
 - `M`: return to menu
 - `R`: reset
@@ -87,7 +86,7 @@ Direct IDE-style entry point also works:
 ## Environment variables
 
 ```env
-NEWCHESS_THEME=classic
+NEWCHESS_THEME=glass
 NEWCHESS_STOCKFISH_PATH=stockfish
 NEWCHESS_STOCKFISH_DEPTH=12
 NEWCHESS_MODEL_PATH=artifacts/value_network.npz

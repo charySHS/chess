@@ -6,7 +6,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Theme:
-    name: str = "classic"
+    name: str = "glass"
     window_width: int = 980
     window_height: int = 772
     board_size: int = 640
@@ -15,26 +15,37 @@ class Theme:
     status_height: int = 84
     fps: int = 60
 
-    light_square: tuple[int, int, int] = (241, 217, 181)
-    dark_square: tuple[int, int, int] = (181, 136, 99)
-    background: tuple[int, int, int] = (28, 32, 38)
-    panel_background: tuple[int, int, int] = (20, 23, 28)
-    side_panel_background: tuple[int, int, int] = (33, 39, 47)
-    side_panel_accent: tuple[int, int, int] = (191, 146, 88)
-    coord_text: tuple[int, int, int] = (224, 224, 224)
-    status_text: tuple[int, int, int] = (238, 238, 238)
-    heading_text: tuple[int, int, int] = (248, 240, 229)
-    muted_text: tuple[int, int, int] = (182, 186, 193)
-    last_move_fill: tuple[int, int, int, int] = (246, 246, 105, 108)
-    selected_outline: tuple[int, int, int] = (78, 172, 255)
-    legal_quiet_fill: tuple[int, int, int, int] = (58, 148, 74, 150)
-    legal_capture_outline: tuple[int, int, int, int] = (206, 68, 62, 220)
-    drag_shadow: tuple[int, int, int, int] = (0, 0, 0, 70)
-    overlay_fill: tuple[int, int, int, int] = (8, 11, 15, 170)
-    win_banner: tuple[int, int, int] = (228, 214, 188)
-    win_banner_text: tuple[int, int, int] = (26, 29, 33)
-    promotion_panel: tuple[int, int, int] = (238, 231, 217)
-    promotion_text: tuple[int, int, int] = (28, 31, 35)
+    light_square: tuple[int, int, int] = (233, 241, 249)
+    dark_square: tuple[int, int, int] = (152, 182, 205)
+    background: tuple[int, int, int] = (10, 16, 28)
+    background_alt: tuple[int, int, int] = (31, 58, 97)
+    panel_background: tuple[int, int, int] = (16, 22, 35)
+    side_panel_background: tuple[int, int, int] = (24, 32, 48)
+    side_panel_accent: tuple[int, int, int] = (150, 229, 255)
+    coord_text: tuple[int, int, int] = (225, 239, 255)
+    status_text: tuple[int, int, int] = (246, 250, 255)
+    heading_text: tuple[int, int, int] = (245, 249, 255)
+    muted_text: tuple[int, int, int] = (191, 213, 233)
+    last_move_fill: tuple[int, int, int, int] = (255, 246, 157, 112)
+    selected_outline: tuple[int, int, int] = (118, 224, 255)
+    legal_quiet_fill: tuple[int, int, int, int] = (92, 233, 174, 150)
+    legal_capture_outline: tuple[int, int, int, int] = (255, 127, 118, 220)
+    drag_shadow: tuple[int, int, int, int] = (0, 0, 0, 76)
+    overlay_fill: tuple[int, int, int, int] = (7, 12, 20, 156)
+    win_banner: tuple[int, int, int] = (214, 238, 255)
+    win_banner_text: tuple[int, int, int] = (20, 30, 40)
+    promotion_panel: tuple[int, int, int] = (224, 242, 255)
+    promotion_text: tuple[int, int, int] = (26, 35, 45)
+
+    glass_fill: tuple[int, int, int, int] = (255, 255, 255, 42)
+    glass_fill_strong: tuple[int, int, int, int] = (255, 255, 255, 64)
+    glass_border: tuple[int, int, int, int] = (255, 255, 255, 108)
+    glass_highlight: tuple[int, int, int, int] = (255, 255, 255, 78)
+    glass_shadow: tuple[int, int, int, int] = (8, 14, 24, 72)
+    board_frame: tuple[int, int, int, int] = (255, 255, 255, 38)
+    orb_primary: tuple[int, int, int, int] = (92, 201, 255, 74)
+    orb_secondary: tuple[int, int, int, int] = (118, 242, 210, 64)
+    orb_tertiary: tuple[int, int, int, int] = (255, 164, 124, 56)
 
     piece_size_normal: int = 80
     piece_size_dragged: int = 120
@@ -66,47 +77,49 @@ class Theme:
 
 
 THEME_PRESETS: dict[str, dict[str, tuple[int, int, int] | tuple[int, int, int, int] | str]] = {
-    "classic": {},
+    "glass": {},
     "midnight": {
-        "light_square": (149, 162, 189),
-        "dark_square": (71, 87, 118),
-        "background": (12, 18, 28),
-        "panel_background": (10, 14, 22),
-        "side_panel_background": (21, 28, 42),
-        "side_panel_accent": (120, 182, 255),
-        "coord_text": (232, 240, 250),
-        "status_text": (242, 245, 250),
-        "heading_text": (236, 244, 255),
-        "muted_text": (171, 187, 208),
-        "selected_outline": (255, 210, 96),
-        "legal_quiet_fill": (76, 205, 132, 150),
-        "legal_capture_outline": (255, 124, 104, 220),
-        "win_banner": (219, 229, 245),
-        "promotion_panel": (224, 234, 249),
+        "light_square": (193, 212, 240),
+        "dark_square": (94, 122, 173),
+        "background": (4, 8, 19),
+        "background_alt": (24, 36, 76),
+        "side_panel_accent": (132, 171, 255),
+        "selected_outline": (245, 220, 130),
+        "orb_primary": (86, 146, 255, 70),
+        "orb_secondary": (137, 100, 255, 64),
+        "orb_tertiary": (88, 220, 214, 58),
+        "win_banner": (220, 228, 255),
+        "promotion_panel": (215, 226, 255),
     },
     "ivory": {
-        "light_square": (242, 236, 221),
-        "dark_square": (154, 133, 112),
-        "background": (239, 233, 223),
-        "panel_background": (59, 54, 48),
-        "side_panel_background": (73, 66, 58),
-        "side_panel_accent": (214, 176, 110),
-        "coord_text": (66, 58, 50),
-        "status_text": (242, 234, 223),
-        "heading_text": (247, 238, 227),
-        "muted_text": (221, 207, 188),
-        "last_move_fill": (255, 227, 117, 120),
-        "selected_outline": (78, 134, 173),
-        "legal_quiet_fill": (52, 127, 84, 146),
-        "legal_capture_outline": (184, 73, 58, 220),
-        "win_banner": (245, 236, 220),
-        "win_banner_text": (50, 43, 35),
-        "promotion_panel": (248, 239, 225),
-        "promotion_text": (42, 39, 34),
+        "light_square": (248, 243, 234),
+        "dark_square": (197, 178, 157),
+        "background": (234, 226, 214),
+        "background_alt": (197, 175, 151),
+        "coord_text": (63, 56, 49),
+        "status_text": (245, 241, 234),
+        "heading_text": (252, 248, 243),
+        "muted_text": (228, 219, 206),
+        "selected_outline": (87, 164, 190),
+        "legal_quiet_fill": (72, 149, 118, 144),
+        "panel_background": (69, 61, 52),
+        "side_panel_background": (88, 78, 68),
+        "side_panel_accent": (230, 193, 132),
+        "glass_fill": (255, 255, 255, 58),
+        "glass_fill_strong": (255, 255, 255, 88),
+        "glass_border": (255, 255, 255, 132),
+        "glass_shadow": (71, 54, 36, 64),
+        "orb_primary": (255, 202, 143, 66),
+        "orb_secondary": (142, 199, 212, 58),
+        "orb_tertiary": (190, 150, 110, 58),
+        "win_banner": (252, 245, 234),
+        "win_banner_text": (52, 46, 40),
+        "promotion_panel": (255, 247, 237),
+        "promotion_text": (58, 49, 40),
     },
 }
 
-THEME_ORDER = ["classic", "midnight", "ivory"]
+THEME_ORDER = ["glass", "midnight", "ivory"]
 
 PIECE_CODE_TO_NAME = {
     "P": "wp",
@@ -141,7 +154,7 @@ LEGACY_FILENAME_MAP = {
 
 def build_theme(name: str) -> Theme:
     base = Theme()
-    preset = THEME_PRESETS.get(name, THEME_PRESETS["classic"])
+    preset = THEME_PRESETS.get(name, THEME_PRESETS["glass"])
     return replace(base, name=name, **preset)
 
 
