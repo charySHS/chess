@@ -1,0 +1,14 @@
+.DS_Store
+.env
+.env.local
+.python-version
+.pytest_cache/
+.uv-cache/
+.venv/
+__pycache__/
+*.py[cod]
+*.iml
+.idea/
+.vscode/
+artifacts/
+data/
