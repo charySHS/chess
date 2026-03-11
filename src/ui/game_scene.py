@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from shutil import which
 from typing import Callable
 
 import pygame
 
 from src.chess_core import Board, Move, START_FEN, generate_legal_moves, is_checkmate, is_in_check, is_stalemate
 from src.chess_core.constants import BLACK, EMPTY, WHITE
+from src.config import AppConfig
+from src.engine.stockfish_bridge import MoveReview, Score, StockfishBridge, classify_move_loss
 from src.engine.search import SearchEngine, SearchResult
 from src.ui.board_renderer import BoardLayout, BoardRenderer, PromotionOverlayState, promotion_option_rects
 from src.ui.input_handler import InputHandler, MoveResolution
@@ -40,6 +44,8 @@ class GameScene:
         self.board = Board(START_FEN)
         self.renderer = BoardRenderer(self.theme)
         self.flipped = False
+        self.mode = "local"
+        self.human_side = WHITE
         self.return_to_menu = return_to_menu or (lambda: None)
         self.request_quit = request_quit or (lambda: None)
         self.cycle_theme = cycle_theme or (lambda: None)
@@ -50,6 +56,7 @@ class GameScene:
         self.move_scroll_offset = 0
         self.engine = SearchEngine()
         self.engine_snapshot: SearchResult | None = None
+        self.last_review: MoveReview | None = None
         self.input_handler = InputHandler(
             square_at_pixel=self.square_at_pixel,
             piece_at_square=self.piece_at_square,
@@ -70,6 +77,23 @@ class GameScene:
         self.theme = theme
         self.renderer = BoardRenderer(theme)
 
+    def configure_mode(self, mode: str) -> None:
+        self.mode = mode
+        self.human_side = WHITE
+
+    def update(self) -> None:
+        if self.mode != "engine":
+            return
+        if self.pending_promotion is not None or self.result.is_over:
+            return
+        if self.board.side_to_move == self.human_side:
+            return
+
+        engine_move = self.engine.choose_move(self.board, depth=2)
+        if engine_move is None:
+            return
+        self.apply_move(engine_move)
+
     def handle_event(self, event: pygame.event.Event) -> None:
         if self.pending_promotion is not None and self._handle_promotion_event(event):
             return
@@ -87,6 +111,7 @@ class GameScene:
             status_text=self.status_text(),
             detail_lines=self.detail_lines(),
             engine_lines=self.engine_lines(),
+            review_badge=self.review_badge(),
             captured_by_white=captured_by_white,
             captured_by_black=captured_by_black,
             move_rows=self.move_rows(),
@@ -113,12 +138,14 @@ class GameScene:
         self.board = Board(START_FEN)
         self.pending_promotion = None
         self.move_scroll_offset = 0
+        self.last_review = None
         self.input_handler.reset_interaction()
         self.refresh_legal_moves()
 
     def undo_last_move(self) -> None:
         self.board.undo_move()
         self.pending_promotion = None
+        self.last_review = None
         self.input_handler.reset_interaction()
         self.refresh_legal_moves()
 
@@ -131,7 +158,11 @@ class GameScene:
         self.return_to_menu()
 
     def interaction_allowed(self) -> bool:
-        return not self.result.is_over and self.pending_promotion is None
+        return (
+            not self.result.is_over
+            and self.pending_promotion is None
+            and (self.mode != "engine" or self.board.side_to_move == self.human_side)
+        )
 
     def square_at_pixel(self, point: tuple[int, int]) -> int | None:
         return self.layout().square_at_pixel(point)
@@ -149,8 +180,10 @@ class GameScene:
         return list(self.legal_moves_by_from.get(square, []))
 
     def apply_move(self, move: Move) -> None:
+        board_before = Board(self.board.to_fen())
         self.board.make_move(move)
         self.pending_promotion = None
+        self.last_review = self._review_move(board_before, move)
         self.refresh_legal_moves()
 
     def resolve_move_choice(self, moves: list[Move]) -> MoveResolution:
@@ -169,7 +202,8 @@ class GameScene:
 
     def status_text(self) -> str:
         side = "White" if self.board.side_to_move == WHITE else "Black"
-        tags: list[str] = [f"Turn: {side}", f"Theme: {self.theme.name.title()}"]
+        mode_label = "Engine" if self.mode == "engine" else "Local"
+        tags: list[str] = [f"Turn: {side}", f"Mode: {mode_label}", f"Theme: {self.theme.name.title()}"]
         if self.result.is_over:
             tags.append(self.result.headline)
         elif self.pending_promotion is not None:
@@ -181,6 +215,7 @@ class GameScene:
     def detail_lines(self) -> list[str]:
         side = "White" if self.board.side_to_move == WHITE else "Black"
         lines = [
+            f"Mode: {'Human vs Engine' if self.mode == 'engine' else 'Local pass-and-play'}",
             f"Side to move: {side}",
             f"Moves available: {len(self.legal_moves)}",
             f"Last move: {self.last_move().uci() if self.last_move() else '--'}",
@@ -205,11 +240,16 @@ class GameScene:
             ]
 
         return [
-            "Engine: local search",
+            f"Engine: {'active' if self.mode == 'engine' else 'analysis'}",
             f"Best move: {self.engine_snapshot.best_move.uci()}",
             f"Eval: {self.engine_snapshot.score:.1f}",
             f"Depth {self.engine_snapshot.depth}  Nodes {self.engine_snapshot.nodes}",
         ]
+
+    def review_badge(self) -> str | None:
+        if self.last_review is None:
+            return None
+        return self.last_review.label
 
     def move_rows(self) -> list[str]:
         rows: list[str] = []
@@ -244,6 +284,32 @@ class GameScene:
             self.engine_snapshot = None
             return
         self.engine_snapshot = self.engine.iterative_deepening(self.board, max_depth=2)
+
+    def _review_move(self, board_before: Board, move: Move) -> MoveReview | None:
+        stockfish_path = AppConfig().stockfish_path
+        if which(stockfish_path) or Path(stockfish_path).exists():
+            try:
+                with StockfishBridge(path=stockfish_path) as bridge:
+                    return bridge.review_move(board_before, move, depth=8)
+            except Exception:
+                pass
+
+        best_result = self.engine.iterative_deepening(board_before, max_depth=2)
+        child_board = Board(board_before.to_fen())
+        child_board.make_move(move)
+        played_result = self.engine.iterative_deepening(child_board, max_depth=1)
+        best_score = int(best_result.score if best_result.best_move is not None else 0)
+        played_score = int(-played_result.score)
+        loss_cp = max(0, best_score - played_score)
+        best_move = best_result.best_move.uci() if best_result.best_move is not None else None
+        return MoveReview(
+            played_move=move.uci(),
+            best_move=best_move,
+            played_score=Score(cp=played_score),
+            best_score=Score(cp=best_score),
+            loss_cp=loss_cp,
+            label=classify_move_loss(loss_cp, move.uci(), best_move),
+        )
 
     def captured_pieces(self) -> tuple[list[str], list[str]]:
         captured_by_white: list[str] = []

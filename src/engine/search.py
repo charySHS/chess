@@ -88,8 +88,7 @@ class SearchEngine:
         if is_stalemate(board):
             return 0.0
         if depth == 0:
-            signed = 1.0 if board.side_to_move == WHITE else -1.0
-            return signed * self.evaluator.evaluate(board)
+            return self._quiescence(board, alpha, beta)
 
         best_score = -inf
         best_move = None
@@ -115,6 +114,28 @@ class SearchEngine:
             TTEntry(depth=depth, score=best_score, flag=flag, best_move_uci=best_move.uci() if best_move else None),
         )
         return best_score
+
+    def _quiescence(self, board: Board, alpha: float, beta: float) -> float:
+        self.nodes_searched += 1
+        signed = 1.0 if board.side_to_move == WHITE else -1.0
+        stand_pat = signed * self.evaluator.evaluate(board)
+        if stand_pat >= beta:
+            return beta
+        alpha = max(alpha, stand_pat)
+
+        capture_moves = [
+            move
+            for move in self._ordered_moves(board)
+            if move.captured != "." or move.is_en_passant or move.promotion is not None
+        ]
+        for move in capture_moves:
+            child = Board(board.to_fen())
+            child.make_move(move)
+            score = -self._quiescence(child, -beta, -alpha)
+            if score >= beta:
+                return beta
+            alpha = max(alpha, score)
+        return alpha
 
     def _ordered_moves(self, board: Board, principal_variation_move: str | None = None) -> list[Move]:
         moves = order_moves(generate_legal_moves(board))

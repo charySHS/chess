@@ -13,7 +13,9 @@ You may not copy, modify, distribute, sublicense, or use this code outside the p
 
 - Core board representation and legal move generation in `src/chess_core/`
 - Pygame board UI in `src/ui/`
-- Start menu, themes, drag-and-drop moves, move highlights, promotion picker
+- Start menu, themes, click-to-move, drag-and-drop, promotion picker
+- Local human-vs-engine mode using the built-in search engine
+- Side-panel engine HUD and move-review badge feedback
 - Checkmate / stalemate detection through the core
 - Early engine stack in `src/engine/`
 - Early value-network training and inference stack in `src/nn/`
@@ -76,6 +78,9 @@ Direct IDE-style entry point also works:
 - `F`: flip board
 - `T`: change theme
 - Promotion chooser: click a piece or press `Q`, `R`, `B`, `N`
+- Menu options:
+  - `Play Local Game`
+  - `Play vs Engine`
 
 ## Tests
 
@@ -102,13 +107,14 @@ Current engine and NN code is foundational:
 - `src/nn/model.py` is a small NumPy value network
 - `src/nn/trainer.py` trains the value net from saved samples
 - `src/nn/infer.py` ranks legal moves from the trained model
+- `src/engine/search.py` now includes iterative deepening, a transposition table, and quiescence search
+- `src/engine/evaluator.py` now includes stronger handcrafted evaluation terms
 
 What is not finished yet:
 
-- live engine-vs-human gameplay
+- strong engine strength and time management
 - robust move review UX
 - production-grade training corpus generation
-- stronger search features like quiescence and time management
 - online multiplayer and backend wiring
 
 ## Git / GitHub

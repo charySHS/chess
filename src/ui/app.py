@@ -16,6 +16,7 @@ class App:
             screen=screen,
             theme=theme,
             start_local_game=self.start_local_game,
+            start_engine_game=self.start_engine_game,
             cycle_theme=self.cycle_theme,
             request_quit=self.stop,
         )
@@ -34,6 +35,7 @@ class App:
             for event in pygame.event.get():
                 self.current_scene().handle_event(event)
 
+            self.current_scene().update()
             self.current_scene().draw()
             clock.tick(self.theme.fps)
 
@@ -43,6 +45,12 @@ class App:
         return self.menu_scene
 
     def start_local_game(self) -> None:
+        self.game_scene.configure_mode("local")
+        self.game_scene.reset_board()
+        self.active_scene = "game"
+
+    def start_engine_game(self) -> None:
+        self.game_scene.configure_mode("engine")
         self.game_scene.reset_board()
         self.active_scene = "game"
 

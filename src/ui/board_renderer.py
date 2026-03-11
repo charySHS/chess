@@ -104,6 +104,7 @@ class BoardRenderer:
         status_text: str,
         detail_lines: list[str],
         engine_lines: list[str],
+        review_badge: str | None,
         captured_by_white: list[str],
         captured_by_black: list[str],
         move_rows: list[str],
@@ -123,6 +124,7 @@ class BoardRenderer:
             surface,
             detail_lines,
             engine_lines,
+            review_badge,
             captured_by_white,
             captured_by_black,
             move_rows,
@@ -201,6 +203,7 @@ class BoardRenderer:
         surface: pygame.Surface,
         detail_lines: list[str],
         engine_lines: list[str],
+        review_badge: str | None,
         captured_by_white: list[str],
         captured_by_black: list[str],
         move_rows: list[str],
@@ -219,6 +222,9 @@ class BoardRenderer:
 
         engine_rect = pygame.Rect(rect.x + 16, rect.y + 206, rect.width - 32, 96)
         self._draw_engine_hud(surface, engine_rect, engine_lines, animation_phase)
+
+        if review_badge is not None:
+            self._draw_review_badge(surface, pygame.Rect(rect.x + 20, rect.y + 176, 158, 28), review_badge)
 
         capture_y = rect.y + 320
         heading = self.panel_title_font.render("Captures", True, self.theme.heading_text)
@@ -255,6 +261,24 @@ class BoardRenderer:
         for index, line in enumerate(engine_lines[:4]):
             text = self.panel_small_font.render(line, True, self.theme.muted_text)
             surface.blit(text, (rect.x + 16, rect.y + 40 + index * 14))
+
+    def _draw_review_badge(self, surface: pygame.Surface, rect: pygame.Rect, review_badge: str) -> None:
+        color_map = {
+            "best": (92, 225, 156),
+            "brilliant": (112, 224, 255),
+            "great": (145, 232, 178),
+            "good": (187, 225, 128),
+            "inaccuracy": (255, 205, 107),
+            "mistake": (255, 158, 96),
+            "blunder": (255, 112, 112),
+        }
+        badge_fill = color_map.get(review_badge.lower(), self.theme.side_panel_accent)
+        panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(panel, (*badge_fill, 72), panel.get_rect(), border_radius=14)
+        pygame.draw.rect(panel, self.theme.glass_border, panel.get_rect(), width=1, border_radius=14)
+        surface.blit(panel, rect.topleft)
+        label = self.panel_small_font.render(f"Review: {review_badge.title()}", True, self.theme.heading_text)
+        surface.blit(label, label.get_rect(center=rect.center))
 
     def _draw_capture_row(self, surface: pygame.Surface, x: int, y: int, label: str, pieces: list[str]) -> None:
         text = self.panel_small_font.render(label, True, self.theme.heading_text)

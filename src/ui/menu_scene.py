@@ -23,12 +23,14 @@ class MenuScene:
         screen: pygame.Surface,
         theme: Theme,
         start_local_game: Callable[[], None],
+        start_engine_game: Callable[[], None],
         cycle_theme: Callable[[], None],
         request_quit: Callable[[], None],
     ) -> None:
         self.screen = screen
         self.theme = theme
         self.start_local_game = start_local_game
+        self.start_engine_game = start_engine_game
         self.cycle_theme = cycle_theme
         self.request_quit = request_quit
         self.button_rects: list[pygame.Rect] = []
@@ -49,10 +51,13 @@ class MenuScene:
     def _build_actions(self) -> None:
         self.actions = [
             MenuAction("Play Local Game", self.start_local_game, "Pass-and-play on one board"),
-            MenuAction("Play vs Engine", None, "Reserved for the upcoming NN engine", enabled=False),
+            MenuAction("Play vs Engine", self.start_engine_game, "Human as White against the local engine"),
             MenuAction("Change Theme", self.cycle_theme, "Cycle between glass theme variants"),
             MenuAction("Quit", self.request_quit, "Exit the application"),
         ]
+
+    def update(self) -> None:
+        return
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.QUIT:
