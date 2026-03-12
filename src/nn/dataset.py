@@ -7,7 +7,7 @@ from typing import Iterable
 
 from src.chess_core import Board, Move, generate_legal_moves
 from src.engine.stockfish_bridge import MoveReview, StockfishBridge
-from src.nn.encoder import encode_board, normalize_centipawns, require_numpy
+from src.nn.encoder import encode_board, mirror_encoded_features, normalize_centipawns, require_numpy
 
 try:
     import numpy as np
@@ -48,6 +48,14 @@ def samples_to_arrays(samples: list[TrainingSample]):
     x = np.stack([encode_board(Board(sample.fen)) for sample in samples])
     y = np.asarray([normalize_centipawns(sample.value_cp) for sample in samples], dtype=np.float32).reshape(-1, 1)
     return x, y
+
+
+def augment_with_mirrors(x, y):
+    require_numpy()
+    mirrored = np.stack([mirror_encoded_features(features) for features in x])
+    x_augmented = np.concatenate((x, mirrored), axis=0)
+    y_augmented = np.concatenate((y, y.copy()), axis=0)
+    return x_augmented, y_augmented
 
 
 def generate_stockfish_samples(

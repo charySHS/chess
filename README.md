@@ -1,6 +1,6 @@
 # NewChess
 
-Python chess project with a separated `chess_core`, a polished pygame desktop UI, an experimental Kivy frontend, a stronger in-house engine, and a local engine-lab stack for self-play, benchmarking, rating, and training workflows.
+Python chess project with a separated `chess_core`, a polished pygame desktop UI, an experimental Kivy frontend, a stronger in-house engine, and a local engine-lab stack for self-play, benchmarking, rating, frozen-baseline snapshots, and NN training workflows.
 
 ## Copyright and license
 
@@ -21,7 +21,7 @@ You may not copy, modify, distribute, sublicense, or use this code outside the p
 - Built-in engine with iterative deepening, alpha-beta / PVS search, quiescence search, null-move pruning, LMR, killer/history ordering, aspiration windows, Zobrist hashing, and a transposition table
 - Optional Stockfish-backed move review when a local binary is available
 - Early value-network training and inference stack in `src/nn/`
-- Local engine-lab tooling for snapshots, rating runs, self-play sample generation, background training loops, and a desktop dashboard
+- Local engine-lab tooling for frozen engine+NN snapshots, rating runs, self-play sample generation, background training loops, and a desktop dashboard
 
 ## Project layout
 
@@ -96,21 +96,26 @@ CLI lab cycle:
 
 ```bash
 ./.venv/bin/python scripts/engine_lab.py \
-  --depth 2 \
-  --rating-games 8 \
-  --selfplay-games 12 \
-  --max-plies 80 \
-  --training-data data/selfplay_baseline_v1.jsonl
+  --benchmark-mode \
+  --rating-games 20 \
+  --selfplay-games 10 \
+  --max-plies 100 \
+  --training-data data/stockfish_samples.jsonl \
+  --train-model
 ```
+
+Recommended behavior:
+
+- leave `--benchmark-mode` on when you want comparable Elo history between batches
+- keep snapshot promotion enabled so each batch freezes a new baseline JSON plus sibling `.npz` NN file
+- leave rating-match learning enabled unless you are running a pure measurement-only pass
+- only change depth / game counts deliberately, because that changes the meaning of the historical Elo numbers
 
 Background runner for long training loops:
 
 ```bash
 ./.venv/bin/python scripts/engine_background_runner.py start \
-  --depth 2 \
-  --rating-games 4 \
-  --selfplay-games 12 \
-  --max-plies 80 \
+  --benchmark-mode \
   --cycles 0 \
   --sleep-seconds 10 \
   --snapshot-interval 5 \
@@ -166,10 +171,20 @@ Current internal-engine features include:
 - handcrafted evaluation with piece-square tables, mobility, pawn structure, passed pawns, rook-file bonuses, king safety, bishop pair, and endgame king activity
 - local benchmarking and snapshot-vs-current gauntlet tooling
 
+Current NN / training features include:
+
+- expanded board encoding with side-to-move, castling, en passant, piece counts, and material features
+- mirror augmentation for value-network training
+- warm-start training from the latest saved model
+- early stopping, validation loss tracking, Adam optimization, weight decay, and gradient clipping
+- compatibility with older saved model artifacts during inference
+- training data generation from both self-play games and rating matches
+- frozen per-batch baseline snapshots that can include both the engine profile JSON and a sibling NN `.npz`
+
 ## Tests
 
 ```bash
-./.venv/bin/python -m pytest tests/test_core.py tests/test_movegen.py tests/test_engine.py tests/test_game_features.py tests/test_profiles.py tests/test_lab.py tests/test_background_runner.py
+./.venv/bin/python -m pytest tests/test_core.py tests/test_movegen.py tests/test_engine.py tests/test_game_features.py tests/test_profiles.py tests/test_lab.py tests/test_background_runner.py tests/test_nn.py
 ```
 
 ## Environment variables
@@ -180,7 +195,7 @@ NEWCHESS_UI_BACKEND=pygame
 NEWCHESS_STOCKFISH_PATH=stockfish
 NEWCHESS_STOCKFISH_DEPTH=12
 NEWCHESS_MODEL_PATH=artifacts/value_network.npz
-NEWCHESS_TRAINING_DATA=data/selfplay_baseline_v1.jsonl
+NEWCHESS_TRAINING_DATA=data/stockfish_samples.jsonl
 ```
 
 ## Benchmarking and snapshots
@@ -195,6 +210,12 @@ Save a frozen engine snapshot profile:
 
 ```bash
 ./.venv/bin/python scripts/save_engine_snapshot.py
+```
+
+Run a fixed benchmark lab cycle against a frozen baseline:
+
+```bash
+./.venv/bin/python scripts/engine_lab.py --benchmark-mode --train-model
 ```
 
 Rate current engine against a frozen snapshot:
@@ -219,7 +240,7 @@ Current engine and NN code is functional and now supports a local self-improveme
 - `src/nn/trainer.py` trains the value net from saved samples
 - `src/nn/infer.py` ranks legal moves from the trained model
 - `src/engine/profile.py` defines snapshotable search/eval profiles
-- `src/engine/lab.py` runs rating, self-play, and training cycles
+- `src/engine/lab.py` runs rating, self-play, frozen-baseline snapshotting, and training cycles
 - `src/engine/lab_app.py` provides a local desktop dashboard for visualization and control
 - `src/engine/background_runner.py` supports unattended long-running training loops
 

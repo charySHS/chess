@@ -28,6 +28,7 @@ def add_shared_args(parser: argparse.ArgumentParser, app_config: AppConfig) -> N
     parser.add_argument("--snapshot", type=Path, default=default_snapshot_path())
     parser.add_argument("--snapshot-name", type=str, default="baseline_v1")
     parser.add_argument("--take-snapshot", action="store_true")
+    parser.add_argument("--no-promote-snapshot-after-batch", action="store_true")
     parser.add_argument("--depth", type=int, default=2)
     parser.add_argument("--rating-games", type=int, default=4)
     parser.add_argument("--selfplay-games", type=int, default=8)
@@ -35,6 +36,8 @@ def add_shared_args(parser: argparse.ArgumentParser, app_config: AppConfig) -> N
     parser.add_argument("--training-data", type=Path, default=app_config.training_data_path)
     parser.add_argument("--model-output", type=Path, default=app_config.model_path)
     parser.add_argument("--train-model", action="store_true")
+    parser.add_argument("--no-learn-from-rating-matches", action="store_true")
+    parser.add_argument("--benchmark-mode", action="store_true")
     parser.add_argument("--cycles", type=int, default=0, help="0 means run indefinitely.")
     parser.add_argument("--sleep-seconds", type=float, default=5.0)
     parser.add_argument("--snapshot-interval", type=int, default=0, help="Take a fresh snapshot every N cycles. 0 disables interval snapshots.")
@@ -55,7 +58,10 @@ def build_config(args) -> tuple[RunnerConfig, RunnerPaths]:
         max_plies=args.max_plies,
         snapshot_name=args.snapshot_name,
         take_snapshot=args.take_snapshot,
+        promote_snapshot_after_batch=not args.no_promote_snapshot_after_batch,
         train_model=args.train_model,
+        learn_from_rating_matches=not args.no_learn_from_rating_matches,
+        benchmark_mode=args.benchmark_mode,
     )
     config = RunnerConfig(
         lab=lab,

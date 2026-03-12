@@ -7,6 +7,7 @@ from shutil import which
 
 from src.chess_core import Board, generate_legal_moves
 from src.config import AppConfig
+from src.engine.profile import load_latest_engine_profile
 from src.engine.search import SearchEngine, SearchResult
 from src.engine.stockfish_bridge import MoveReview, Score, StockfishBridge, classify_move_loss
 
@@ -17,7 +18,8 @@ MATE_SCORE_CP = 100000
 class AnalysisWorker:
     def __init__(self) -> None:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="newchess-analysis")
-        self._search_engine = SearchEngine()
+        latest = load_latest_engine_profile(Path("artifacts/engine_snapshots"))
+        self._search_engine = SearchEngine(profile=latest[0]) if latest is not None else SearchEngine()
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)

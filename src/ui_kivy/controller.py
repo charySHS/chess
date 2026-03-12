@@ -8,6 +8,7 @@ from shutil import which
 from src.chess_core import Board, Move, START_FEN, generate_legal_moves, is_checkmate, is_in_check, is_stalemate
 from src.chess_core.constants import BLACK, EMPTY, WHITE
 from src.config import AppConfig
+from src.engine.profile import load_latest_engine_profile
 from src.engine.search import SearchEngine, SearchResult
 from src.engine.stockfish_bridge import MoveReview, Score, StockfishBridge, classify_move_loss
 
@@ -55,7 +56,8 @@ class GameController:
         self.result = GameResult(False, "In Progress")
         self.pending_promotion: PendingPromotion | None = None
         self.move_scroll_offset = 0
-        self.engine = SearchEngine()
+        latest = load_latest_engine_profile(Path("artifacts/engine_snapshots"))
+        self.engine = SearchEngine(profile=latest[0]) if latest is not None else SearchEngine()
         self.engine_snapshot: SearchResult | None = None
         self.last_review: MoveReview | None = None
         self.refresh_legal_moves()

@@ -21,6 +21,7 @@ def main() -> None:
     parser.add_argument("--snapshot", type=Path, default=default_snapshot_path())
     parser.add_argument("--snapshot-name", type=str, default="baseline_v1")
     parser.add_argument("--take-snapshot", action="store_true")
+    parser.add_argument("--no-promote-snapshot-after-batch", action="store_true")
     parser.add_argument("--depth", type=int, default=3)
     parser.add_argument("--rating-games", type=int, default=6)
     parser.add_argument("--selfplay-games", type=int, default=8)
@@ -28,6 +29,8 @@ def main() -> None:
     parser.add_argument("--training-data", type=Path, default=app_config.training_data_path)
     parser.add_argument("--model-output", type=Path, default=app_config.model_path)
     parser.add_argument("--train-model", action="store_true")
+    parser.add_argument("--no-learn-from-rating-matches", action="store_true")
+    parser.add_argument("--benchmark-mode", action="store_true")
     args = parser.parse_args()
 
     snapshot_profile = load_engine_profile(args.snapshot) if args.snapshot.exists() else None
@@ -46,11 +49,16 @@ def main() -> None:
         max_plies=args.max_plies,
         snapshot_name=args.snapshot_name,
         take_snapshot=args.take_snapshot,
+        promote_snapshot_after_batch=not args.no_promote_snapshot_after_batch,
         train_model=args.train_model,
+        learn_from_rating_matches=not args.no_learn_from_rating_matches,
+        benchmark_mode=args.benchmark_mode,
     )
     summary = run_lab_cycle(config, snapshot_profile or load_engine_profile(args.snapshot))
 
     print(f"snapshot: {summary.snapshot_path}")
+    if summary.snapshot_model_path is not None:
+        print(f"snapshot_model: {summary.snapshot_model_path}")
     print(f"history: {summary.history_path}")
     print(
         f"rating: score={summary.rating.score:.1f}/{summary.rating.games} "

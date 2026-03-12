@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.engine.lab import LabConfig, LabSummary, run_lab_cycle
-from src.engine.profile import current_engine_profile, load_engine_profile
+from src.engine.profile import current_engine_profile, load_latest_engine_profile, load_engine_profile
 
 
 @dataclass(frozen=True)
@@ -118,6 +118,10 @@ def start_background_runner(script_path: Path, config: RunnerConfig, paths: Runn
         args.append("--take-snapshot")
     if config.lab.train_model:
         args.append("--train-model")
+    if not config.lab.learn_from_rating_matches:
+        args.append("--no-learn-from-rating-matches")
+    if config.lab.benchmark_mode:
+        args.append("--benchmark-mode")
 
     process = subprocess.Popen(
         args,
@@ -197,10 +201,16 @@ def run_background_loop(config: RunnerConfig, paths: RunnerPaths) -> None:
                 max_plies=config.lab.max_plies,
                 snapshot_name=config.lab.snapshot_name,
                 take_snapshot=take_snapshot,
+                promote_snapshot_after_batch=config.lab.promote_snapshot_after_batch,
                 train_model=config.lab.train_model,
+                learn_from_rating_matches=config.lab.learn_from_rating_matches,
+                benchmark_mode=config.lab.benchmark_mode,
             )
+            latest = load_latest_engine_profile(cycle_lab.snapshot_path.parent)
             snapshot_profile = (
-                load_engine_profile(cycle_lab.snapshot_path)
+                latest[0]
+                if latest is not None
+                else load_engine_profile(cycle_lab.snapshot_path)
                 if cycle_lab.snapshot_path.exists()
                 else current_engine_profile("bootstrap")
             )

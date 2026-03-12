@@ -8,7 +8,17 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from src.config import AppConfig
-from src.engine.lab import LabConfig, LabSummary, default_history_path, load_history_entries, run_lab_cycle
+from src.engine.lab import (
+    BENCHMARK_DEPTH,
+    BENCHMARK_MAX_PLIES,
+    BENCHMARK_RATING_GAMES,
+    BENCHMARK_SELFPLAY_GAMES,
+    LabConfig,
+    LabSummary,
+    default_history_path,
+    load_history_entries,
+    run_lab_cycle,
+)
 from src.engine.profile import current_engine_profile, default_snapshot_path, load_engine_profile
 
 
@@ -50,11 +60,14 @@ class EngineLabApp:
         self.max_plies_var = tk.IntVar(value=80)
         self.take_snapshot_var = tk.BooleanVar(value=False)
         self.train_model_var = tk.BooleanVar(value=False)
+        self.learn_from_rating_var = tk.BooleanVar(value=True)
+        self.benchmark_mode_var = tk.BooleanVar(value=True)
 
         self.status_var = tk.StringVar(value="Idle")
         self.rating_var = tk.StringVar(value="Rating: --")
         self.selfplay_var = tk.StringVar(value="Self-play: --")
         self.training_var = tk.StringVar(value="Training: --")
+        self.snapshot_info_var = tk.StringVar(value="Baseline: --")
         self.live_game_var = tk.StringVar(value="Live Board: waiting")
         self.last_move_var = tk.StringVar(value="Last Move: --")
         self.history_path = default_history_path()
@@ -122,6 +135,15 @@ class EngineLabApp:
         options.pack(fill=tk.X, pady=(10, 18))
         ttk.Checkbutton(options, text="Take fresh snapshot first", variable=self.take_snapshot_var).pack(anchor="w")
         ttk.Checkbutton(options, text="Train value network after self-play", variable=self.train_model_var).pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(options, text="Learn from rating matches too", variable=self.learn_from_rating_var).pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(
+            options,
+            text=(
+                f"Use fixed benchmark preset "
+                f"(d{BENCHMARK_DEPTH}, r{BENCHMARK_RATING_GAMES}, s{BENCHMARK_SELFPLAY_GAMES}, p{BENCHMARK_MAX_PLIES})"
+            ),
+            variable=self.benchmark_mode_var,
+        ).pack(anchor="w", pady=(6, 0))
 
         actions = ttk.Frame(controls, style="Panel.TFrame")
         actions.pack(fill=tk.X)
@@ -133,6 +155,8 @@ class EngineLabApp:
 
         summary = ttk.Frame(dashboard, style="Panel.TFrame")
         summary.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 14))
+        summary.columnconfigure(0, weight=1)
+        ttk.Label(summary, textvariable=self.snapshot_info_var, style="Panel.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
         for idx in range(3):
             summary.columnconfigure(idx, weight=1)
         self._summary_card(summary, 0, "Rating", self.rating_var)
@@ -204,7 +228,7 @@ class EngineLabApp:
 
     def _summary_card(self, parent: ttk.Frame, column: int, title: str, value_var: tk.StringVar) -> None:
         card = ttk.Frame(parent, style="Panel.TFrame", padding=14)
-        card.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 8, 0))
+        card.grid(row=1, column=column, sticky="nsew", padx=(0 if column == 0 else 8, 0))
         ttk.Label(card, text=title, style="Panel.TLabel", font=("Avenir Next", 12, "bold")).pack(anchor="w")
         ttk.Label(card, textvariable=value_var, style="Panel.TLabel", wraplength=220).pack(anchor="w", pady=(6, 0))
 
@@ -336,8 +360,14 @@ class EngineLabApp:
         self.selfplay_var.set("Self-play: running")
         self.training_var.set("Training: queued" if self.train_model_var.get() else "Training: skipped")
         self._append_log("Starting lab cycle")
+        if self.benchmark_mode_var.get():
+            self._append_log(
+                f"Benchmark preset active: depth={BENCHMARK_DEPTH}, rating={BENCHMARK_RATING_GAMES}, "
+                f"selfplay={BENCHMARK_SELFPLAY_GAMES}, max_plies={BENCHMARK_MAX_PLIES}"
+            )
         self.live_game_var.set("Live Board: waiting for first position")
         self.last_move_var.set("Last Move: --")
+        self.snapshot_info_var.set("Baseline: running")
 
         config = LabConfig(
             snapshot_path=snapshot_path,
@@ -350,6 +380,8 @@ class EngineLabApp:
             snapshot_name=self.snapshot_name_var.get().strip() or "baseline_v1",
             take_snapshot=self.take_snapshot_var.get(),
             train_model=self.train_model_var.get(),
+            learn_from_rating_matches=self.learn_from_rating_var.get(),
+            benchmark_mode=self.benchmark_mode_var.get(),
         )
 
         snapshot_profile = load_engine_profile(snapshot_path) if snapshot_path.exists() else None
@@ -390,6 +422,8 @@ class EngineLabApp:
         self.running = False
         self.run_button.state(["!disabled"])
         self.status_var.set("Lab cycle complete")
+        model_label = summary.snapshot_model_path.name if summary.snapshot_model_path is not None else "no frozen model"
+        self.snapshot_info_var.set(f"Baseline: {summary.snapshot_path.name} | Model: {model_label}")
         self.rating_var.set(
             f"Rating: {summary.rating.score:.1f}/{summary.rating.games} "
             f"(avg {summary.rating.average:.3f}, elo {summary.rating.estimated_elo_diff:.1f})"
@@ -411,6 +445,7 @@ class EngineLabApp:
         self.running = False
         self.run_button.state(["!disabled"])
         self.status_var.set("Lab cycle failed")
+        self.snapshot_info_var.set("Baseline: failed")
         self._append_log(payload)
         messagebox.showerror("Engine lab failed", payload)
 
@@ -431,6 +466,10 @@ class EngineLabApp:
         elif event_type == "history_updated":
             self.history_entries = load_history_entries(Path(str(payload.get("path", self.history_path))))
             self._redraw_charts()
+        elif event_type == "snapshot_promoted":
+            snapshot_name = Path(str(payload.get("path", ""))).name or "--"
+            model_name = Path(str(payload.get("model_path", ""))).name or "no frozen model"
+            self.snapshot_info_var.set(f"Baseline: {snapshot_name} | Model: {model_name}")
 
 
 def run_engine_lab_app() -> None:

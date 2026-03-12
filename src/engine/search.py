@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import inf
+from pathlib import Path
 
 from src.chess_core import WHITE, Board, Move, generate_legal_moves, is_checkmate, is_in_check, is_stalemate
 from src.chess_core.constants import EMPTY
+from src.config import AppConfig
 from src.engine.evaluator import HybridEvaluator
 from src.engine.ordering import move_ordering_key
 from src.engine.profile import EngineProfile, SearchConfig
 from src.engine.see import piece_value, static_exchange_eval
 from src.engine.transposition import EXACT, LOWERBOUND, UPPERBOUND, TTEntry, TranspositionTable
+from src.nn.infer import NeuralEvaluator
 
 
 MATE_SCORE = 1000000.0
@@ -29,17 +32,31 @@ class SearchEngine:
         evaluator: HybridEvaluator | None = None,
         config: SearchConfig | None = None,
         profile: EngineProfile | None = None,
+        model_path: Path | None = None,
     ) -> None:
+        self.model_path = model_path
         if profile is not None:
             self.config = profile.search
-            self.evaluator = evaluator or HybridEvaluator.from_config(profile.evaluator)
+            self.evaluator = evaluator or self._build_evaluator(profile)
         else:
             self.config = config or SearchConfig()
-            self.evaluator = evaluator or HybridEvaluator()
+            self.evaluator = evaluator or self._build_evaluator()
         self.transposition_table = TranspositionTable()
         self.nodes_searched = 0
         self.killer_moves: dict[int, list[str]] = {}
         self.history_scores: dict[str, int] = {}
+
+    def _build_evaluator(self, profile: EngineProfile | None = None) -> HybridEvaluator:
+        neural = None
+        model_path = self.model_path or AppConfig().model_path
+        if Path(model_path).exists():
+            try:
+                neural = NeuralEvaluator.from_path(model_path)
+            except Exception:
+                neural = None
+        if profile is not None:
+            return HybridEvaluator.from_config(profile.evaluator, neural=neural)
+        return HybridEvaluator(neural=neural)
 
     def choose_move(self, board: Board, depth: int = 2):
         return self.iterative_deepening(board, max_depth=depth).best_move

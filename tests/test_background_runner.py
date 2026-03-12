@@ -23,6 +23,7 @@ def test_background_runner_single_cycle_updates_status_and_history(tmp_path) -> 
             rating_games=1,
             selfplay_games=1,
             max_plies=10,
+            promote_snapshot_after_batch=True,
             train_model=False,
         ),
         cycles=1,

@@ -23,7 +23,7 @@ class NeuralEvaluator:
         return cls(ValueNetwork.load(path))
 
     def evaluate_board(self, board: Board) -> float:
-        features = encode_board(board).reshape(1, -1)
+        features = self._adapt_features(encode_board(board)).reshape(1, -1)
         prediction = float(self.model.predict(features)[0, 0])
         return denormalize_value(prediction)
 
@@ -35,3 +35,18 @@ class NeuralEvaluator:
             score = -self.evaluate_board(child)
             scored.append(MoveScore(move=move, value=score))
         return sorted(scored, key=lambda item: item.value, reverse=True)
+
+    def _adapt_features(self, features):
+        input_size = self.model.config.input_size
+        if features.shape[0] == input_size:
+            return features
+        if features.shape[0] > input_size:
+            return features[:input_size]
+
+        padded = features.copy()
+        extra = input_size - features.shape[0]
+        if extra > 0:
+            import numpy as np
+
+            padded = np.pad(padded, (0, extra))
+        return padded
