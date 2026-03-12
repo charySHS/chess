@@ -1,23 +1,27 @@
 from __future__ import annotations
 
+from concurrent.futures import Future
 from dataclasses import dataclass
-from math import isfinite
-from pathlib import Path
-from shutil import which
+from time import perf_counter
 from typing import Callable
 
 import pygame
 
 from src.chess_core import Board, Move, START_FEN, generate_legal_moves, is_checkmate, is_in_check, is_stalemate
 from src.chess_core.constants import BLACK, EMPTY, WHITE
-from src.config import AppConfig
-from src.engine.stockfish_bridge import MoveReview, Score, StockfishBridge, classify_move_loss
-from src.engine.search import SearchEngine, SearchResult
-from src.ui.board_renderer import BoardLayout, BoardRenderer, PromotionOverlayState, promotion_option_rects
+from src.engine.stockfish_bridge import MoveReview
+from src.engine.search import SearchResult
+from src.ui.analysis_worker import AnalysisWorker
+from src.ui.board_renderer import (
+    BoardLayout,
+    BoardRenderer,
+    MoveAnimationState,
+    PromotionOverlayState,
+    promotion_option_rects,
+)
+from src.ui.audio import AudioManager
 from src.ui.input_handler import InputHandler, MoveResolution
 from src.ui.theme import Theme
-
-MATE_SCORE_CP = 100000
 
 
 @dataclass(frozen=True)
@@ -33,7 +37,41 @@ class PendingPromotion:
     moves: list[Move]
 
 
+@dataclass
+class ActiveMoveAnimation:
+    piece: str
+    from_square: int
+    to_square: int
+    captured_piece: str
+    captured_square: int | None
+    started_at: float
+    duration: float = 0.18
+
+    def snapshot(self) -> MoveAnimationState:
+        progress = min(1.0, max(0.0, (perf_counter() - self.started_at) / self.duration))
+        return MoveAnimationState(
+            piece=self.piece,
+            from_square=self.from_square,
+            to_square=self.to_square,
+            progress=progress,
+            captured_piece=self.captured_piece,
+            captured_square=self.captured_square,
+        )
+
+
+@dataclass
+class AlertBanner:
+    text: str
+    started_at: float
+    duration: float = 1.6
+
+    def progress(self) -> float:
+        return min(1.0, max(0.0, (perf_counter() - self.started_at) / self.duration))
+
+
 class GameScene:
+    ENGINE_DEPTH = 3
+
     def __init__(
         self,
         screen: pygame.Surface,
@@ -57,9 +95,19 @@ class GameScene:
         self.result = GameResult(False, "In Progress")
         self.pending_promotion: PendingPromotion | None = None
         self.move_scroll_offset = 0
-        self.engine = SearchEngine()
+        self.analysis_worker = AnalysisWorker()
         self.engine_snapshot: SearchResult | None = None
         self.last_review: MoveReview | None = None
+        self.active_animation: ActiveMoveAnimation | None = None
+        self.audio = AudioManager()
+        self.rook_alert: AlertBanner | None = None
+        self.entered_at = perf_counter()
+        self.engine_snapshot_future: Future[SearchResult] | None = None
+        self.engine_snapshot_fen: str | None = None
+        self.engine_move_future: Future[str | None] | None = None
+        self.engine_move_fen: str | None = None
+        self.review_future: Future[MoveReview | None] | None = None
+        self.review_target: tuple[str, str] | None = None
         self.input_handler = InputHandler(
             square_at_pixel=self.square_at_pixel,
             piece_at_square=self.piece_at_square,
@@ -76,6 +124,15 @@ class GameScene:
         )
         self.refresh_legal_moves()
 
+    def activate(self) -> None:
+        self.entered_at = perf_counter()
+        self.active_animation = None
+        self.rook_alert = None
+
+    def close(self) -> None:
+        self._clear_background_requests()
+        self.analysis_worker.shutdown()
+
     def set_theme(self, theme: Theme) -> None:
         self.theme = theme
         self.renderer = BoardRenderer(theme)
@@ -86,19 +143,19 @@ class GameScene:
     def configure_mode(self, mode: str) -> None:
         self.mode = mode
         self.human_side = WHITE
+        self._sync_local_orientation()
 
     def update(self) -> None:
+        self._update_animation()
+        self._update_alerts()
+        self._poll_background_work()
         if self.mode != "engine":
             return
         if self.pending_promotion is not None or self.result.is_over:
             return
         if self.board.side_to_move == self.human_side:
             return
-
-        engine_move = self.engine.choose_move(self.board, depth=2)
-        if engine_move is None:
-            return
-        self.apply_move(engine_move)
+        self._ensure_engine_move_request()
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if self.pending_promotion is not None and self._handle_promotion_event(event):
@@ -127,6 +184,9 @@ class GameScene:
             last_move=self.last_move(),
             game_over_message=self.game_over_message(),
             promotion_overlay=self.promotion_overlay_state(),
+            move_animation=self.move_animation_state(),
+            intro_progress=self.intro_progress(),
+            rook_alert_text=self.rook_alert_text(),
             animation_phase=pygame.time.get_ticks() / 1000.0,
         )
         pygame.display.flip()
@@ -146,14 +206,22 @@ class GameScene:
         self.pending_promotion = None
         self.move_scroll_offset = 0
         self.last_review = None
+        self.active_animation = None
+        self.rook_alert = None
+        self._clear_background_requests()
         self.input_handler.reset_interaction()
+        self._sync_local_orientation()
         self.refresh_legal_moves()
 
     def undo_last_move(self) -> None:
         self.board.undo_move()
         self.pending_promotion = None
         self.last_review = None
+        self.active_animation = None
+        self.rook_alert = None
+        self._clear_background_requests()
         self.input_handler.reset_interaction()
+        self._sync_local_orientation()
         self.refresh_legal_moves()
 
     def toggle_flip(self) -> None:
@@ -188,9 +256,29 @@ class GameScene:
 
     def apply_move(self, move: Move) -> None:
         board_before = Board(self.board.to_fen())
+        moving_piece = self.board.piece_at(move.from_square)
+        captured_piece = self.board.piece_at(move.to_square)
+        captured_square = move.to_square
+        if move.is_en_passant:
+            captured_square = self.board._en_passant_capture_square(move.to_square, moving_piece)
+            captured_piece = self.board.piece_at(captured_square)
+
         self.board.make_move(move)
+        self.active_animation = ActiveMoveAnimation(
+            piece=move.promotion if move.promotion is not None else moving_piece,
+            from_square=move.from_square,
+            to_square=move.to_square,
+            captured_piece=captured_piece,
+            captured_square=captured_square if captured_piece != EMPTY else None,
+            started_at=perf_counter(),
+        )
+        if captured_piece.lower() == "r":
+            self.rook_alert = AlertBanner("Rook down.", perf_counter())
+            self.audio.play_rook_alert()
         self.pending_promotion = None
-        self.last_review = self._review_move(board_before, move)
+        self.last_review = None
+        self._request_move_review(board_before.to_fen(), move.uci())
+        self._sync_local_orientation()
         self.refresh_legal_moves()
 
     def resolve_move_choice(self, moves: list[Move]) -> MoveResolution:
@@ -239,7 +327,7 @@ class GameScene:
     def engine_lines(self) -> list[str]:
         if self.engine_snapshot is None or self.engine_snapshot.best_move is None:
             return [
-                "Engine: waiting",
+                "Engine: thinking" if self.engine_snapshot_future is not None else "Engine: waiting",
                 "Best move: --",
                 "Eval: --",
                 "Depth: --",
@@ -259,6 +347,8 @@ class GameScene:
 
     def review_summary(self) -> str:
         if self.last_review is None:
+            if self.review_future is not None:
+                return "Review in progress. The UI stays responsive while the analysis thread scores the last move."
             return "Review will appear here after each move. Best line, score swing, and move quality stay visible while you play."
 
         best_move = self.last_review.best_move or "--"
@@ -301,63 +391,14 @@ class GameScene:
     def _refresh_engine_snapshot(self) -> None:
         if self.result.is_over or not self.legal_moves:
             self.engine_snapshot = None
+            self.engine_snapshot_future = None
+            self.engine_snapshot_fen = None
             return
-        self.engine_snapshot = self.engine.iterative_deepening(self.board, max_depth=2)
-
-    def _review_move(self, board_before: Board, move: Move) -> MoveReview | None:
-        config = AppConfig()
-        review_depth = max(10, config.stockfish_depth)
-        fallback_depth = 3
-        stockfish_path = AppConfig().stockfish_path
-        if which(stockfish_path) or Path(stockfish_path).exists():
-            try:
-                with StockfishBridge(path=stockfish_path) as bridge:
-                    return bridge.review_move(board_before, move, depth=review_depth)
-            except Exception:
-                pass
-
-        best_result = self.engine.iterative_deepening(board_before, max_depth=fallback_depth)
-        child_board = Board(board_before.to_fen())
-        child_board.make_move(move)
-        played_result = self.engine.iterative_deepening(child_board, max_depth=max(2, fallback_depth - 1))
-        best_score = self._normalize_review_score(best_result.score if best_result.best_move is not None else 0.0)
-        played_score = self._normalize_review_score(-played_result.score)
-        loss_cp = max(0, best_score - played_score)
-        best_move = best_result.best_move.uci() if best_result.best_move is not None else None
-        best_margin_cp = self._fallback_best_margin(board_before, best_move)
-        return MoveReview(
-            played_move=move.uci(),
-            best_move=best_move,
-            played_score=Score(cp=played_score),
-            best_score=Score(cp=best_score),
-            loss_cp=loss_cp,
-            label=classify_move_loss(loss_cp, move.uci(), best_move, best_margin_cp=best_margin_cp),
-        )
-
-    def _normalize_review_score(self, score: float) -> int:
-        if not isfinite(score):
-            return MATE_SCORE_CP if score > 0 else -MATE_SCORE_CP
-        return int(max(-MATE_SCORE_CP, min(MATE_SCORE_CP, score)))
-
-    def _fallback_best_margin(self, board_before: Board, best_move: str | None) -> int | None:
-        if best_move is None:
-            return None
-
-        best_score: int | None = None
-        runner_up_score: int | None = None
-        for candidate in generate_legal_moves(board_before):
-            child_board = Board(board_before.to_fen())
-            child_board.make_move(candidate)
-            candidate_score = self._normalize_review_score(-self.engine.iterative_deepening(child_board, max_depth=1).score)
-            if candidate.uci() == best_move:
-                best_score = candidate_score
-                continue
-            if runner_up_score is None or candidate_score > runner_up_score:
-                runner_up_score = candidate_score
-
-        if best_score is None or runner_up_score is None:
-            return None
-        return max(0, best_score - runner_up_score)
+        fen = self.board.to_fen()
+        if self.engine_snapshot_future is not None and self.engine_snapshot_fen == fen:
+            return
+        self.engine_snapshot_future = self.analysis_worker.submit_engine_snapshot(fen, self.ENGINE_DEPTH)
+        self.engine_snapshot_fen = fen
 
     def captured_pieces(self) -> tuple[list[str], list[str]]:
         captured_by_white: list[str] = []
@@ -381,13 +422,34 @@ class GameScene:
             return None
         return PromotionOverlayState(self.pending_promotion.moves)
 
+    def move_animation_state(self) -> MoveAnimationState | None:
+        if self.active_animation is None:
+            return None
+        return self.active_animation.snapshot()
+
+    def intro_progress(self) -> float:
+        return min(1.0, max(0.0, (perf_counter() - self.entered_at) / 0.45))
+
+    def rook_alert_text(self) -> str | None:
+        if self.rook_alert is None:
+            return None
+        if self.rook_alert.progress() >= 1.0:
+            return None
+        return self.rook_alert.text
+
     def evaluate_result(self) -> GameResult:
         if is_checkmate(self.board):
             winner = "Black" if self.board.side_to_move == WHITE else "White"
             return GameResult(True, f"Checkmate: {winner} wins", winner=winner, reason="checkmate")
+        if self.board.is_threefold_repetition():
+            return GameResult(True, "Draw by repetition", reason="repetition")
         if is_stalemate(self.board):
             return GameResult(True, "Draw by stalemate", reason="stalemate")
         return GameResult(False, "In Progress")
+
+    def _sync_local_orientation(self) -> None:
+        if self.mode == "local":
+            self.flipped = self.board.side_to_move == BLACK
 
     def _handle_promotion_event(self, event: pygame.event.Event) -> bool:
         if event.type == pygame.QUIT:
@@ -445,3 +507,82 @@ class GameScene:
         if self.board.side_to_move == BLACK:
             return piece.islower()
         return False
+
+    def _update_animation(self) -> None:
+        if self.active_animation is None:
+            return
+        if self.active_animation.snapshot().progress >= 1.0:
+            self.active_animation = None
+
+    def _update_alerts(self) -> None:
+        if self.rook_alert is not None and self.rook_alert.progress() >= 1.0:
+            self.rook_alert = None
+
+    def _request_move_review(self, before_fen: str, move_uci: str) -> None:
+        self.review_future = self.analysis_worker.submit_move_review(before_fen, move_uci)
+        self.review_target = (before_fen, move_uci)
+
+    def _ensure_engine_move_request(self) -> None:
+        fen = self.board.to_fen()
+        if self.engine_move_future is not None and self.engine_move_fen == fen:
+            return
+        self.engine_move_future = self.analysis_worker.submit_engine_move(fen, self.ENGINE_DEPTH)
+        self.engine_move_fen = fen
+
+    def _poll_background_work(self) -> None:
+        current_fen = self.board.to_fen()
+
+        if self.engine_snapshot_future is not None and self.engine_snapshot_future.done():
+            try:
+                snapshot = self.engine_snapshot_future.result()
+            except Exception:
+                snapshot = None
+            if snapshot is not None and self.engine_snapshot_fen == current_fen:
+                self.engine_snapshot = snapshot
+            self.engine_snapshot_future = None
+            self.engine_snapshot_fen = None
+
+        if self.review_future is not None and self.review_future.done():
+            try:
+                review = self.review_future.result()
+            except Exception:
+                review = None
+            if self.review_target is not None and self.review_target[0] == self._board_before_last_move_fen():
+                self.last_review = review
+            self.review_future = None
+            self.review_target = None
+
+        if self.engine_move_future is not None and self.engine_move_future.done():
+            try:
+                move_uci = self.engine_move_future.result()
+            except Exception:
+                move_uci = None
+            target_fen = self.engine_move_fen
+            self.engine_move_future = None
+            self.engine_move_fen = None
+            if target_fen != current_fen or move_uci is None or self.mode != "engine" or self.result.is_over:
+                return
+            move = next((candidate for candidate in self.legal_moves if candidate.uci() == move_uci), None)
+            if move is not None and self.board.side_to_move != self.human_side:
+                self.apply_move(move)
+
+    def _board_before_last_move_fen(self) -> str | None:
+        if not self.board.history:
+            return None
+        board_before = Board(self.board.to_fen())
+        board_before.undo_move()
+        return board_before.to_fen()
+
+    def _clear_background_requests(self) -> None:
+        if self.engine_snapshot_future is not None:
+            self.engine_snapshot_future.cancel()
+        self.engine_snapshot_future = None
+        self.engine_snapshot_fen = None
+        if self.engine_move_future is not None:
+            self.engine_move_future.cancel()
+        self.engine_move_future = None
+        self.engine_move_fen = None
+        if self.review_future is not None:
+            self.review_future.cancel()
+        self.review_future = None
+        self.review_target = None

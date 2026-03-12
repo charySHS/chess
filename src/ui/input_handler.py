@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Optional
 
 import pygame
 
@@ -9,7 +9,7 @@ from src.chess_core.constants import EMPTY
 from src.chess_core.move import Move
 
 
-SquareLookup = Callable[[tuple[int, int]], int | None]
+SquareLookup = Callable[[tuple[int, int]], Optional[int]]
 PieceLookup = Callable[[int], str]
 MovesLookup = Callable[[int], list[Move]]
 MoveApplier = Callable[[Move], None]

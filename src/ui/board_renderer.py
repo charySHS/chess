@@ -54,6 +54,16 @@ class PromotionOverlayState:
     moves: list[Move]
 
 
+@dataclass(frozen=True)
+class MoveAnimationState:
+    piece: str
+    from_square: int
+    to_square: int
+    progress: float
+    captured_piece: str = EMPTY
+    captured_square: int | None = None
+
+
 def promotion_option_rects(theme: Theme) -> list[pygame.Rect]:
     board_x, board_y = theme.board_origin
     start_x = board_x + (theme.board_size - 4 * 88) // 2
@@ -63,9 +73,12 @@ def promotion_option_rects(theme: Theme) -> list[pygame.Rect]:
 
 class PieceSpriteStore:
     def __init__(self, theme: Theme) -> None:
-        self.normal = self._load_scaled_set(theme.piece_size_normal)
-        self.dragged = self._load_scaled_set(theme.piece_size_dragged)
-        self.preview = self._load_scaled_set(64)
+        normal_size = min(theme.piece_size_normal, max(48, theme.square_size - 10))
+        dragged_size = min(theme.piece_size_dragged, max(normal_size + 18, theme.square_size + 22))
+        preview_size = max(42, min(64, theme.square_size - 18))
+        self.normal = self._load_scaled_set(normal_size)
+        self.dragged = self._load_scaled_set(dragged_size)
+        self.preview = self._load_scaled_set(preview_size)
 
     def _load_scaled_set(self, target_size: int) -> dict[str, pygame.Surface]:
         sprites: dict[str, pygame.Surface] = {}
@@ -91,11 +104,18 @@ class BoardRenderer:
     def __init__(self, theme: Theme) -> None:
         self.theme = theme
         self.sprites = PieceSpriteStore(theme)
-        self.coord_font = pygame.font.SysFont("trebuchetms", theme.label_font_size)
-        self.status_font = pygame.font.SysFont("segoeui", theme.status_font_size, bold=True)
-        self.panel_title_font = pygame.font.SysFont("segoeui", theme.panel_title_font_size, bold=True)
-        self.panel_body_font = pygame.font.SysFont("segoeui", theme.panel_body_font_size)
-        self.panel_small_font = pygame.font.SysFont("trebuchetms", theme.panel_small_font_size)
+        self.coord_font = self._font(["Avenir Next", "Avenir", "Trebuchet MS"], theme.label_font_size, bold=True)
+        self.status_font = self._font(["Avenir Next", "Avenir", "Segoe UI"], theme.status_font_size, bold=True)
+        self.panel_title_font = self._font(["Avenir Next", "Avenir", "Segoe UI"], theme.panel_title_font_size, bold=True)
+        self.panel_body_font = self._font(["Avenir Next", "Avenir", "Segoe UI"], theme.panel_body_font_size)
+        self.panel_small_font = self._font(["Avenir Next Condensed", "Avenir Next", "Trebuchet MS"], theme.panel_small_font_size)
+        self.meta_font = self._font(["Avenir Next Condensed", "Avenir Next", "Trebuchet MS"], max(13, theme.panel_small_font_size - 1), bold=True)
+
+    def _font(self, candidates: list[str], size: int, bold: bool = False) -> pygame.font.Font:
+        for name in candidates:
+            if pygame.font.match_font(name):
+                return pygame.font.SysFont(name, size, bold=bold)
+        return pygame.font.SysFont(None, size, bold=bold)
 
     def _draw_glass_panel(
         self,
@@ -137,13 +157,20 @@ class BoardRenderer:
         last_move: Move | None,
         game_over_message: str | None,
         promotion_overlay: PromotionOverlayState | None,
+        move_animation: MoveAnimationState | None,
+        intro_progress: float,
+        rook_alert_text: str | None,
         animation_phase: float,
     ) -> None:
         draw_gradient_backdrop(surface, self.theme, grid_spacing=max(60, self.theme.square_size - 4))
         self._draw_orbs(surface, animation_phase)
-        layout = BoardLayout(*self.theme.board_origin, self.theme.square_size, flipped)
-        self._draw_board_frame(surface, animation_phase)
-        self._draw_status_panel(surface, status_text, review_text, review_badge)
+        board_offset_x = int((1.0 - intro_progress) * -36)
+        side_offset_x = int((1.0 - intro_progress) * 54)
+        status_offset_y = int((1.0 - intro_progress) * 32)
+        alpha = max(0, min(255, int(255 * intro_progress)))
+        layout = BoardLayout(self.theme.board_origin[0] + board_offset_x, self.theme.board_origin[1], self.theme.square_size, flipped)
+        self._draw_board_frame(surface, animation_phase, board_offset_x)
+        self._draw_status_panel(surface, status_text, review_text, review_badge, status_offset_y)
         self._draw_side_panel(
             surface,
             detail_lines,
@@ -152,31 +179,36 @@ class BoardRenderer:
             captured_by_black,
             move_rows,
             move_scroll_offset,
+            side_offset_x,
             animation_phase,
         )
         self._draw_board(surface, layout)
-        self._draw_last_move(surface, layout, last_move)
+        self._draw_last_move(surface, layout, last_move, animation_phase)
         self._draw_hover_square(surface, layout, input_state.hover_square)
         self._draw_selected_square(surface, layout, input_state.selected_square)
         self._draw_legal_moves(surface, layout, input_state.legal_moves)
         self._draw_coordinates(surface, layout)
-        self._draw_pieces(surface, board, layout, input_state)
+        self._draw_pieces(surface, board, layout, input_state, move_animation)
+        self._draw_move_animation(surface, layout, move_animation, animation_phase)
         self._draw_dragged_piece(surface, board, input_state, animation_phase)
         self._draw_game_over_overlay(surface, game_over_message, animation_phase)
         self._draw_promotion_overlay(surface, promotion_overlay, animation_phase)
+        self._draw_rook_alert(surface, rook_alert_text, alpha, animation_phase)
 
     def _draw_orbs(self, surface: pygame.Surface, animation_phase: float) -> None:
         draw_orb(surface, (int(self.theme.window_width * 0.14), int(self.theme.window_height * 0.14)), max(160, self.theme.board_size // 4), self.theme.orb_primary, animation_phase * 0.9)
         draw_orb(surface, (int(self.theme.window_width * 0.86), int(self.theme.window_height * 0.16)), max(130, self.theme.board_size // 5), self.theme.orb_secondary, animation_phase * 1.1)
         draw_orb(surface, (int(self.theme.window_width * 0.88), int(self.theme.window_height * 0.82)), max(180, self.theme.board_size // 3), self.theme.orb_tertiary, animation_phase * 0.7)
 
-    def _draw_board_frame(self, surface: pygame.Surface, animation_phase: float) -> None:
-        frame = pygame.Rect(self.theme.board_origin[0] - 14, self.theme.board_origin[1] - 14, self.theme.board_size + 28, self.theme.board_size + 28)
+    def _draw_board_frame(self, surface: pygame.Surface, animation_phase: float, offset_x: int = 0) -> None:
+        frame = pygame.Rect(self.theme.board_origin[0] - 14 + offset_x, self.theme.board_origin[1] - 14, self.theme.board_size + 28, self.theme.board_size + 28)
         draw_glass_panel(surface, self.theme, frame, radius=30)
         outline = pygame.Surface(frame.size, pygame.SRCALPHA)
-        pygame.draw.rect(outline, self.theme.board_frame, outline.get_rect(), width=1, border_radius=30)
+        pygame.draw.rect(outline, self.theme.board_frame, outline.get_rect(), width=2, border_radius=30)
         glow_alpha = 16 + int(10 * (sin(animation_phase * 1.7) + 1.0))
-        pygame.draw.rect(outline, (255, 255, 255, glow_alpha), outline.get_rect().inflate(-12, -12), width=1, border_radius=24)
+        pygame.draw.rect(outline, (255, 246, 226, glow_alpha), outline.get_rect().inflate(-12, -12), width=1, border_radius=24)
+        accent = pygame.Rect(24, frame.height - 26, frame.width - 48, 4)
+        pygame.draw.rect(outline, self.theme.side_panel_accent_soft, accent, border_radius=4)
         surface.blit(outline, frame.topleft)
 
     def _draw_status_panel(
@@ -185,12 +217,13 @@ class BoardRenderer:
         status_text: str,
         review_text: str,
         review_badge: str | None,
+        offset_y: int = 0,
     ) -> None:
-        rect = pygame.Rect(18, self.theme.window_height - self.theme.status_height - 8, self.theme.window_width - 36, self.theme.status_height - 8)
+        rect = pygame.Rect(18, self.theme.window_height - self.theme.status_height - 8 + offset_y, self.theme.window_width - 36, self.theme.status_height - 8)
         draw_glass_panel(surface, self.theme, rect, radius=24, strong=True)
-        chip_rect = pygame.Rect(rect.x + 18, rect.y + 16, 86, 24)
-        draw_glass_chip(surface, self.theme, chip_rect, label="Status", font=self.panel_small_font, text_color=self.theme.heading_text)
-        blit_fit_text(surface, self.status_font, status_text, self.theme.status_text, pygame.Rect(rect.x + 20, rect.y + 40, rect.width - 40, 24))
+        chip_rect = pygame.Rect(rect.x + 18, rect.y + 16, 96, 24)
+        draw_glass_chip(surface, self.theme, chip_rect, label="LIVE MATCH", font=self.meta_font, text_color=self.theme.heading_text)
+        blit_fit_text(surface, self.status_font, status_text, self.theme.status_text, pygame.Rect(rect.x + 20, rect.y + 42, rect.width - 40, 24))
 
         review_rect = pygame.Rect(rect.x + 16, rect.y + 72, rect.width - 32, 30)
         self._draw_review_bar(surface, review_rect, review_text, review_badge)
@@ -204,36 +237,49 @@ class BoardRenderer:
         captured_by_black: list[str],
         move_rows: list[str],
         move_scroll_offset: int,
+        offset_x: int,
         animation_phase: float,
     ) -> None:
         rect = pygame.Rect(self.theme.side_panel_rect)
+        rect.x += offset_x
         draw_glass_panel(surface, self.theme, rect, radius=28, strong=True)
 
-        draw_glass_chip(surface, self.theme, pygame.Rect(rect.x + 20, rect.y + 18, 84, 24), label="Match", font=self.panel_small_font, text_color=self.theme.heading_text)
+        self._draw_match_header(surface, rect, detail_lines)
 
-        for index, line in enumerate(detail_lines[:4]):
-            font = self.panel_body_font if index == 0 else self.panel_small_font
-            color = self.theme.heading_text if index == 0 else self.theme.muted_text
-            blit_fit_text(surface, font, line, color, pygame.Rect(rect.x + 20, rect.y + 58 + index * 26, rect.width - 40, 22))
-
-        engine_rect = pygame.Rect(rect.x + 16, rect.y + 168, rect.width - 32, 96)
+        engine_rect = pygame.Rect(rect.x + 16, rect.y + 160, rect.width - 32, 104)
         self._draw_engine_hud(surface, engine_rect, engine_lines, animation_phase)
 
         capture_y = rect.y + 292
-        draw_glass_chip(surface, self.theme, pygame.Rect(rect.x + 20, capture_y, 102, 24), label="Captures", font=self.panel_small_font, text_color=self.theme.heading_text)
+        draw_glass_chip(surface, self.theme, pygame.Rect(rect.x + 20, capture_y, 102, 24), label="CAPTURES", font=self.meta_font, text_color=self.theme.heading_text)
         self._draw_capture_row(surface, rect.x + 20, capture_y + 44, "White", captured_by_white)
         self._draw_capture_row(surface, rect.x + 20, capture_y + 100, "Black", captured_by_black)
 
         moves_y = rect.y + 414
-        draw_glass_chip(surface, self.theme, pygame.Rect(rect.x + 20, moves_y, 82, 24), label="Moves", font=self.panel_small_font, text_color=self.theme.heading_text)
+        draw_glass_chip(surface, self.theme, pygame.Rect(rect.x + 20, moves_y, 82, 24), label="MOVES", font=self.meta_font, text_color=self.theme.heading_text)
         move_area = pygame.Rect(rect.x + 16, moves_y + 40, rect.width - 32, 124)
         self._draw_move_history(surface, move_area, move_rows, move_scroll_offset)
 
         shortcut_y = rect.bottom - 62
-        draw_glass_chip(surface, self.theme, pygame.Rect(rect.x + 20, shortcut_y, 96, 24), label="Controls", font=self.panel_small_font, text_color=self.theme.heading_text)
-        shortcuts = ["Esc Quit   M Menu", "R Reset   U Undo   F Flip", "T Theme"]
+        draw_glass_chip(surface, self.theme, pygame.Rect(rect.x + 20, shortcut_y, 96, 24), label="CONTROL", font=self.meta_font, text_color=self.theme.heading_text)
+        shortcuts = ["Esc Quit   M Menu", "R Reset   U Undo", "T Theme   F Flip"]
         for index, label in enumerate(shortcuts):
             blit_fit_text(surface, self.panel_small_font, label, self.theme.muted_text, pygame.Rect(rect.x + 20, shortcut_y + 34 + index * 18, rect.width - 40, 16))
+
+    def _draw_match_header(self, surface: pygame.Surface, rect: pygame.Rect, detail_lines: list[str]) -> None:
+        header = pygame.Rect(rect.x + 16, rect.y + 16, rect.width - 32, 126)
+        draw_glass_panel(surface, self.theme, header, radius=22)
+        draw_glass_chip(surface, self.theme, pygame.Rect(header.x + 14, header.y + 12, 86, 22), label="SESSION", font=self.meta_font, text_color=self.theme.heading_text)
+        if detail_lines:
+            blit_fit_text(surface, self.panel_title_font, detail_lines[0], self.theme.heading_text, pygame.Rect(header.x + 14, header.y + 42, header.width - 28, 24))
+
+        stat_top = header.y + 76
+        cards = [
+            pygame.Rect(header.x + 14, stat_top, (header.width - 36) // 2, 34),
+            pygame.Rect(header.x + 22 + (header.width - 36) // 2, stat_top, (header.width - 36) // 2, 34),
+        ]
+        labels = detail_lines[1:3]
+        for card, text in zip(cards, labels):
+            draw_glass_chip(surface, self.theme, card, label=text.upper(), font=self.meta_font, text_color=self.theme.muted_text)
 
     def _draw_engine_hud(
         self,
@@ -243,12 +289,13 @@ class BoardRenderer:
         animation_phase: float,
     ) -> None:
         draw_glass_panel(surface, self.theme, rect, radius=18)
-        draw_glass_chip(surface, self.theme, pygame.Rect(rect.x + 14, rect.y + 10, 88, 24), label="Engine", font=self.panel_small_font, text_color=self.theme.heading_text)
+        draw_glass_chip(surface, self.theme, pygame.Rect(rect.x + 14, rect.y + 10, 88, 24), label="ENGINE", font=self.meta_font, text_color=self.theme.heading_text)
         pulse_width = 8 + int(10 * (sin(animation_phase * 2.4) + 1.0))
         pygame.draw.ellipse(surface, self.theme.side_panel_accent, pygame.Rect(rect.right - pulse_width - 18, rect.y + 18, pulse_width, 10))
         for index, line in enumerate(engine_lines[:4]):
-            color = self.theme.muted_text if index < 2 else self.theme.subtle_text
-            blit_fit_text(surface, self.panel_small_font, line, color, pygame.Rect(rect.x + 16, rect.y + 42 + index * 15, rect.width - 32, 14))
+            color = self.theme.heading_text if index == 1 else self.theme.muted_text if index == 0 else self.theme.subtle_text
+            font = self.panel_body_font if index == 1 else self.panel_small_font
+            blit_fit_text(surface, font, line, color, pygame.Rect(rect.x + 16, rect.y + 40 + index * 17, rect.width - 32, 16))
 
     def _draw_review_bar(
         self,
@@ -269,7 +316,7 @@ class BoardRenderer:
         pygame.draw.rect(badge, (*badge_fill, 74), badge.get_rect(), border_radius=14)
         pygame.draw.rect(badge, self.theme.glass_border, badge.get_rect(), width=1, border_radius=14)
         surface.blit(badge, badge_rect.topleft)
-        blit_fit_text(surface, self.panel_small_font, badge_label, self.theme.heading_text, badge_rect.inflate(-10, -8), center=True)
+        blit_fit_text(surface, self.meta_font, badge_label.upper(), self.theme.heading_text, badge_rect.inflate(-10, -8), center=True)
         blit_fit_text(surface, self.panel_small_font, review_text, self.theme.muted_text, pygame.Rect(badge_rect.right + 12, rect.y + 8, rect.width - badge_rect.width - 30, rect.height - 12))
 
     def _review_badge_fill(self, review_badge: str) -> tuple[int, int, int]:
@@ -301,7 +348,7 @@ class BoardRenderer:
             pygame.draw.rect(capsule_surface, self.theme.glass_border, capsule_surface.get_rect(), width=1, border_radius=10)
             surface.blit(capsule_surface, capsule.topleft)
             sprite = self.sprites.preview[piece]
-            surface.blit(sprite, (capsule.x - 19, capsule.y - 19))
+            self._draw_piece_centered(surface, sprite, capsule)
 
     def _draw_move_history(self, surface: pygame.Surface, area: pygame.Rect, move_rows: list[str], move_scroll_offset: int) -> None:
         self._draw_glass_panel(surface, area, radius=18)
@@ -336,19 +383,30 @@ class BoardRenderer:
             row = square // 8
             col = square % 8
             color = self.theme.light_square if (row + col) % 2 == 0 else self.theme.dark_square
-            pygame.draw.rect(board_surface, color, local_rect)
+            pygame.draw.rect(board_surface, color, local_rect, border_radius=8)
+            if (row + col) % 2 == 0:
+                highlight = pygame.Surface((local_rect.width, local_rect.height), pygame.SRCALPHA)
+                pygame.draw.rect(highlight, (255, 255, 255, 14), highlight.get_rect(), border_radius=8)
+                board_surface.blit(highlight, local_rect.topleft)
         glaze = pygame.Surface((self.theme.board_size, self.theme.board_size), pygame.SRCALPHA)
         pygame.draw.rect(glaze, self.theme.glass_fill, glaze.get_rect(), border_radius=24)
+        pygame.draw.rect(glaze, (8, 12, 18, 40), glaze.get_rect().inflate(-12, -12), width=2, border_radius=20)
         board_surface.blit(glaze, (0, 0))
         pygame.draw.rect(board_surface, self.theme.glass_edge_glow, board_surface.get_rect(), width=2, border_radius=24)
         pygame.draw.rect(board_surface, self.theme.glass_fill_soft, board_surface.get_rect().inflate(-16, -16), width=1, border_radius=18)
         surface.blit(board_surface, self.theme.board_origin)
 
-    def _draw_last_move(self, surface: pygame.Surface, layout: BoardLayout, last_move: Move | None) -> None:
+    def _draw_last_move(self, surface: pygame.Surface, layout: BoardLayout, last_move: Move | None, animation_phase: float) -> None:
         if last_move is None:
             return
         overlay = pygame.Surface((self.theme.square_size, self.theme.square_size), pygame.SRCALPHA)
-        overlay.fill(self.theme.last_move_fill)
+        pulse = 0.72 + 0.28 * (sin(animation_phase * 4.2) + 1.0) / 2.0
+        overlay.fill((
+            self.theme.last_move_fill[0],
+            self.theme.last_move_fill[1],
+            self.theme.last_move_fill[2],
+            int(self.theme.last_move_fill[3] * pulse),
+        ))
         for square in (last_move.from_square, last_move.to_square):
             surface.blit(overlay, layout.square_rect(square).topleft)
 
@@ -389,16 +447,79 @@ class BoardRenderer:
             files = files[::-1]
             ranks = ranks[::-1]
         for display_col, file_char in enumerate(files):
-            self._blit_fit_text(surface, self.coord_font, file_char, self.theme.coord_text, pygame.Rect(layout.origin_x + display_col * layout.square_size + layout.square_size - 18, layout.origin_y + 8 * layout.square_size + 4, 18, 18))
+            chip = pygame.Rect(layout.origin_x + display_col * layout.square_size + layout.square_size - 24, layout.origin_y + 8 * layout.square_size + 6, 18, 18)
+            self._draw_glass_panel(surface, chip, radius=9)
+            self._blit_fit_text(surface, self.coord_font, file_char.upper(), self.theme.coord_text, chip, center=True)
         for display_row, rank_char in enumerate(ranks):
-            self._blit_fit_text(surface, self.coord_font, rank_char, self.theme.coord_text, pygame.Rect(layout.origin_x - 16, layout.origin_y + display_row * layout.square_size + 6, 16, 18))
+            chip = pygame.Rect(layout.origin_x - 22, layout.origin_y + display_row * layout.square_size + 6, 18, 18)
+            self._draw_glass_panel(surface, chip, radius=9)
+            self._blit_fit_text(surface, self.coord_font, rank_char, self.theme.coord_text, chip, center=True)
 
-    def _draw_pieces(self, surface: pygame.Surface, board: Board, layout: BoardLayout, input_state: InputState) -> None:
+    def _draw_piece_centered(
+        self,
+        surface: pygame.Surface,
+        sprite: pygame.Surface,
+        rect: pygame.Rect,
+        offset: tuple[int, int] = (0, 0),
+    ) -> None:
+        sprite_rect = sprite.get_rect(center=rect.center)
+        sprite_rect.move_ip(*offset)
+        surface.blit(sprite, sprite_rect)
+
+    def _draw_pieces(
+        self,
+        surface: pygame.Surface,
+        board: Board,
+        layout: BoardLayout,
+        input_state: InputState,
+        move_animation: MoveAnimationState | None,
+    ) -> None:
         hidden_square = input_state.drag_origin if input_state.is_dragging else None
         for square, piece in enumerate(board.squares):
             if piece == EMPTY or square == hidden_square:
                 continue
-            surface.blit(self.sprites.normal[piece], layout.square_rect(square).topleft)
+            if move_animation is not None and square == move_animation.to_square and piece == move_animation.piece:
+                continue
+            if (
+                move_animation is not None
+                and move_animation.captured_square == square
+                and piece == move_animation.captured_piece
+                and move_animation.progress < 1.0
+            ):
+                continue
+            self._draw_piece_centered(surface, self.sprites.normal[piece], layout.square_rect(square))
+
+    def _draw_move_animation(
+        self,
+        surface: pygame.Surface,
+        layout: BoardLayout,
+        move_animation: MoveAnimationState | None,
+        animation_phase: float,
+    ) -> None:
+        if move_animation is None:
+            return
+
+        progress = max(0.0, min(1.0, move_animation.progress))
+        from_rect = layout.square_rect(move_animation.from_square)
+        to_rect = layout.square_rect(move_animation.to_square)
+        center_x = from_rect.centerx + (to_rect.centerx - from_rect.centerx) * progress
+        center_y = from_rect.centery + (to_rect.centery - from_rect.centery) * progress
+
+        if move_animation.captured_piece != EMPTY and move_animation.captured_square is not None:
+            capture_rect = layout.square_rect(move_animation.captured_square)
+            fade = max(0, int(255 * (1.0 - progress)))
+            captured_sprite = self.sprites.normal[move_animation.captured_piece].copy()
+            captured_sprite.set_alpha(fade)
+            shake = int(3 * sin(animation_phase * 26.0) * (1.0 - progress))
+            self._draw_piece_centered(surface, captured_sprite, capture_rect, (shake, 0))
+
+        sprite = self.sprites.normal[move_animation.piece]
+        sprite_rect = sprite.get_rect(center=(int(center_x), int(center_y)))
+        shadow = pygame.Surface((sprite_rect.width + 10, sprite_rect.height + 10), pygame.SRCALPHA)
+        pygame.draw.ellipse(shadow, (*self.theme.drag_shadow[:3], 62), shadow.get_rect())
+        shadow_rect = shadow.get_rect(center=(sprite_rect.centerx + 2, sprite_rect.centery + sprite_rect.height // 2 + 8))
+        surface.blit(shadow, shadow_rect)
+        surface.blit(sprite, sprite_rect)
 
     def _draw_dragged_piece(
         self,
@@ -459,6 +580,22 @@ class BoardRenderer:
             draw_glass_panel(surface, self.theme, rect, radius=18, strong=True)
             piece = move.promotion if move.promotion is not None else move.piece
             sprite = self.sprites.preview[piece]
-            sprite_rect = sprite.get_rect(center=(rect.centerx, rect.centery - 8))
-            surface.blit(sprite, sprite_rect)
+            preview_rect = rect.move(0, -8)
+            self._draw_piece_centered(surface, sprite, preview_rect)
             blit_fit_text(surface, self.panel_small_font, piece.upper(), self.theme.promotion_text, pygame.Rect(rect.x + 6, rect.bottom - 22, rect.width - 12, 14), center=True)
+
+    def _draw_rook_alert(
+        self,
+        surface: pygame.Surface,
+        rook_alert_text: str | None,
+        alpha: int,
+        animation_phase: float,
+    ) -> None:
+        if rook_alert_text is None or alpha <= 0:
+            return
+        rect = pygame.Rect(self.theme.board_origin[0] + 26, self.theme.board_origin[1] + 18 + int(4 * sin(animation_phase * 4.0)), 176, 44)
+        panel = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(panel, (*self.theme.side_panel_accent, min(154, alpha)), panel.get_rect(), border_radius=18)
+        pygame.draw.rect(panel, self.theme.glass_border, panel.get_rect(), width=1, border_radius=18)
+        surface.blit(panel, rect.topleft)
+        blit_fit_text(surface, self.panel_small_font, rook_alert_text.upper(), self.theme.panel_background, rect.inflate(-12, -12), center=True)

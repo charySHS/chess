@@ -18,15 +18,15 @@ class TTEntry:
 
 class TranspositionTable:
     def __init__(self) -> None:
-        self._entries: dict[str, TTEntry] = {}
+        self._entries: dict[int, TTEntry] = {}
 
-    def get(self, fen: str) -> TTEntry | None:
-        return self._entries.get(fen)
+    def get(self, key: int) -> TTEntry | None:
+        return self._entries.get(key)
 
-    def store(self, fen: str, entry: TTEntry) -> None:
-        existing = self._entries.get(fen)
+    def store(self, key: int, entry: TTEntry) -> None:
+        existing = self._entries.get(key)
         if existing is None or entry.depth >= existing.depth:
-            self._entries[fen] = entry
+            self._entries[key] = entry
 
     def clear(self) -> None:
         self._entries.clear()

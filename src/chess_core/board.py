@@ -14,6 +14,7 @@ from .constants import (
     WHITE_PIECES
 )
 from .move import Move, square_to_index, index_to_square
+from .zobrist import CASTLING_KEYS, EN_PASSANT_KEYS, PIECE_KEYS, SIDE_TO_MOVE_KEY, hash_position
 
 
 @dataclass
@@ -26,6 +27,17 @@ class BoardState:
     fullmove_number: int
     white_king_pos: int
     black_king_pos: int
+    zobrist_key: int
+
+
+@dataclass
+class NullMoveState:
+    castling_rights: str
+    en_passant: Optional[int]
+    halfmove_clock: int
+    fullmove_number: int
+    side_to_move: str
+    zobrist_key: int
 
 
 def is_white_piece(piece: str) -> bool:
@@ -67,6 +79,10 @@ class Board:
         self.black_king_pos: int = -1
 
         self.history: list[BoardState] = []
+        self.null_history: list[NullMoveState] = []
+        self.position_history: list[int] = []
+        self.position_counts: dict[int, int] = {}
+        self.zobrist_key: int = 0
 
         self.set_fen(fen)
 
@@ -81,6 +97,9 @@ class Board:
 
         self.squares = [EMPTY] * 64
         self.history.clear()
+        self.null_history.clear()
+        self.position_history.clear()
+        self.position_counts.clear()
         self.white_king_pos = -1
         self.black_king_pos = -1
 
@@ -121,6 +140,9 @@ class Board:
         if self.white_king_pos == -1 or self.black_king_pos == -1:
             raise ValueError("Both kings must exist on board.")
 
+        self.zobrist_key = hash_position(self.squares, self.side_to_move, self.castling_rights, self.en_passant)
+        self._record_position(self.zobrist_key)
+
 
     def to_fen(self) -> str:
         rows: list[str] = []
@@ -153,6 +175,41 @@ class Board:
 
         return f"{placement} {active} {castling} {ep} {self.halfmove_clock} {self.fullmove_number}"
 
+    def repetition_count(self) -> int:
+        return self.position_counts.get(self.zobrist_key, 0)
+
+    def is_threefold_repetition(self) -> bool:
+        return self.repetition_count() >= 3
+
+    def _record_position(self, key: int) -> None:
+        self.position_history.append(key)
+        self.position_counts[key] = self.position_counts.get(key, 0) + 1
+
+    def _unrecord_position(self) -> None:
+        if not self.position_history:
+            return
+        key = self.position_history.pop()
+        count = self.position_counts.get(key, 0)
+        if count <= 1:
+            self.position_counts.pop(key, None)
+        else:
+            self.position_counts[key] = count - 1
+
+    def _toggle_piece_hash(self, piece: str, square: int) -> None:
+        if piece != EMPTY:
+            self.zobrist_key ^= PIECE_KEYS[(piece, square)]
+
+    def _toggle_castling_hash(self, rights: str) -> None:
+        for flag in rights:
+            self.zobrist_key ^= CASTLING_KEYS[flag]
+
+    def _toggle_en_passant_hash(self, square: Optional[int]) -> None:
+        if square is not None:
+            self.zobrist_key ^= EN_PASSANT_KEYS[square % 8]
+
+    def _toggle_side_hash(self) -> None:
+        self.zobrist_key ^= SIDE_TO_MOVE_KEY
+
 
     # -------------------------------------------------
     # -- Square / Piece Helpers
@@ -161,7 +218,12 @@ class Board:
         return self.squares[index]
 
     def set_piece_at(self, index: int, piece: str) -> None:
+        current = self.squares[index]
+        if current != EMPTY:
+            self._toggle_piece_hash(current, index)
         self.squares[index] = piece
+        if piece != EMPTY:
+            self._toggle_piece_hash(piece, index)
 
         if piece == "K":
             self.white_king_pos = index
@@ -198,10 +260,13 @@ class Board:
             halfmove_clock=self.halfmove_clock,
             fullmove_number=self.fullmove_number,
             white_king_pos=self.white_king_pos,
-            black_king_pos=self.black_king_pos
+            black_king_pos=self.black_king_pos,
+            zobrist_key=self.zobrist_key,
         )
 
         self.history.append(state)
+        self._toggle_castling_hash(self.castling_rights)
+        self._toggle_en_passant_hash(self.en_passant)
 
         # Reset en passant unless recreated
         self.en_passant = None
@@ -216,12 +281,17 @@ class Board:
         if move.is_en_passant:
             ep_capture_square = self._en_passant_capture_square(move.to_square, moving_piece)
             self.squares[ep_capture_square] = EMPTY
+            self._toggle_piece_hash(captured_piece, ep_capture_square)
 
         # move
         self.squares[move.from_square] = EMPTY
+        self._toggle_piece_hash(moving_piece, move.from_square)
 
         placed_piece = move.promotion if move.promotion else moving_piece
         self.squares[move.to_square] = placed_piece
+        if captured_piece != EMPTY and not move.is_en_passant:
+            self._toggle_piece_hash(captured_piece, move.to_square)
+        self._toggle_piece_hash(placed_piece, move.to_square)
 
         # Update king position
         if moving_piece == "K":
@@ -282,12 +352,17 @@ class Board:
 
         # Switch side to move
         self.side_to_move = BLACK if self.side_to_move == WHITE else WHITE
+        self._toggle_castling_hash(self.castling_rights)
+        self._toggle_en_passant_hash(self.en_passant)
+        self._toggle_side_hash()
+        self._record_position(self.zobrist_key)
 
 
     def undo_move(self) -> None:
         if not self.history:
             return
 
+        self._unrecord_position()
         prev = self.history.pop()
         move = prev.move
 
@@ -298,6 +373,7 @@ class Board:
         self.fullmove_number = prev.fullmove_number
         self.white_king_pos = prev.white_king_pos
         self.black_king_pos = prev.black_king_pos
+        self.zobrist_key = prev.zobrist_key
 
         # Clear destination square
         self.squares[move.to_square] = EMPTY
@@ -333,6 +409,37 @@ class Board:
         else:
             # Normal move or promotion
             self.squares[move.to_square] = prev.captured_piece
+
+    def make_null_move(self) -> None:
+        state = NullMoveState(
+            castling_rights=self.castling_rights,
+            en_passant=self.en_passant,
+            halfmove_clock=self.halfmove_clock,
+            fullmove_number=self.fullmove_number,
+            side_to_move=self.side_to_move,
+            zobrist_key=self.zobrist_key,
+        )
+        self.null_history.append(state)
+        self._toggle_en_passant_hash(self.en_passant)
+        self.en_passant = None
+        self.halfmove_clock += 1
+        if self.side_to_move == BLACK:
+            self.fullmove_number += 1
+        self.side_to_move = BLACK if self.side_to_move == WHITE else WHITE
+        self._toggle_side_hash()
+        self._record_position(self.zobrist_key)
+
+    def undo_null_move(self) -> None:
+        if not self.null_history:
+            return
+        self._unrecord_position()
+        prev = self.null_history.pop()
+        self.castling_rights = prev.castling_rights
+        self.en_passant = prev.en_passant
+        self.halfmove_clock = prev.halfmove_clock
+        self.fullmove_number = prev.fullmove_number
+        self.side_to_move = prev.side_to_move
+        self.zobrist_key = prev.zobrist_key
 
 
     # ---------------------------------------

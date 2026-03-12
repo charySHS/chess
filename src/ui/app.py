@@ -60,11 +60,13 @@ class App:
     def start_local_game(self) -> None:
         self.game_scene.configure_mode("local")
         self.game_scene.reset_board()
+        self.game_scene.activate()
         self.active_scene = "game"
 
     def start_engine_game(self) -> None:
         self.game_scene.configure_mode("engine")
         self.game_scene.reset_board()
+        self.game_scene.activate()
         self.active_scene = "game"
 
     def show_menu(self) -> None:
@@ -76,6 +78,7 @@ class App:
         self._apply_theme(resized)
 
     def stop(self) -> None:
+        self.game_scene.close()
         self.running = False
 
     def resize_window(self, width: int, height: int) -> None:

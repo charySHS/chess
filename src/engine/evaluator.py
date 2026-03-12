@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from src.chess_core import Board
 from src.chess_core.constants import PIECE_VALUES
+from src.chess_core.movegen import generate_pseudo_legal_moves, is_in_check
+from src.engine.profile import EvaluatorConfig
 from src.nn.infer import NeuralEvaluator
 
 PAWN_TABLE = [
@@ -88,12 +90,31 @@ class HybridEvaluator:
     material_weight: float = 1.0
     neural_weight: float = 1.0
     mobility_weight: float = 0.35
+    passed_pawn_weight: float = 1.0
+    rook_file_weight: float = 1.0
+    king_safety_weight: float = 1.0
+    endgame_king_weight: float = 1.0
+
+    @classmethod
+    def from_config(cls, config: EvaluatorConfig, neural: NeuralEvaluator | None = None) -> HybridEvaluator:
+        return cls(
+            neural=neural,
+            material_weight=config.material_weight,
+            neural_weight=config.neural_weight,
+            mobility_weight=config.mobility_weight,
+            passed_pawn_weight=config.passed_pawn_weight,
+            rook_file_weight=config.rook_file_weight,
+            king_safety_weight=config.king_safety_weight,
+            endgame_king_weight=config.endgame_king_weight,
+        )
 
     def evaluate(self, board: Board) -> float:
         material = 0.0
         placement = 0.0
         white_bishops = 0
         black_bishops = 0
+        white_material = 0.0
+        black_material = 0.0
 
         for square, piece in enumerate(board.squares):
             if piece == ".":
@@ -103,15 +124,24 @@ class HybridEvaluator:
             placement += self._piece_square_bonus(piece, square)
             if piece == "B":
                 white_bishops += 1
+                white_material += 300
             elif piece == "b":
                 black_bishops += 1
+                black_material += 300
+            elif piece.isupper():
+                white_material += abs(PIECE_VALUES.get(piece, 0))
+            else:
+                black_material += abs(PIECE_VALUES.get(piece, 0))
 
         score = self.material_weight * material
         score += placement
         score += self._center_control_bonus(board)
         score += self._pawn_structure_bonus(board)
-        score += self._king_safety_bonus(board)
+        score += self.king_safety_weight * self._king_safety_bonus(board)
         score += self.mobility_weight * self._mobility_bonus(board)
+        score += self.passed_pawn_weight * self._passed_pawn_bonus(board)
+        score += self.rook_file_weight * self._rook_file_bonus(board)
+        score += self.endgame_king_weight * self._endgame_king_activity_bonus(board, white_material, black_material)
         if white_bishops >= 2:
             score += 24
         if black_bishops >= 2:
@@ -177,16 +207,81 @@ class HybridEvaluator:
             score += 16.0
         if black_rank <= 1:
             score -= 16.0
+        if is_in_check(board, "w"):
+            score -= 20.0
+        if is_in_check(board, "b"):
+            score += 20.0
         return score
 
     def _mobility_bonus(self, board: Board) -> float:
-        white = 0
-        black = 0
-        for piece in board.squares:
-            if piece == ".":
+        white_moves = len(generate_pseudo_legal_moves(board, "w"))
+        black_moves = len(generate_pseudo_legal_moves(board, "b"))
+        return float((white_moves - black_moves) * 1.6)
+
+    def _passed_pawn_bonus(self, board: Board) -> float:
+        score = 0.0
+        for square, piece in enumerate(board.squares):
+            if piece not in ("P", "p"):
                 continue
-            if piece.isupper():
-                white += 1
+            row = square // 8
+            file_index = square % 8
+            adjacent_files = range(max(0, file_index - 1), min(7, file_index + 1) + 1)
+            blocked = False
+            if piece == "P":
+                for check_row in range(0, row):
+                    for check_file in adjacent_files:
+                        if board.squares[check_row * 8 + check_file] == "p":
+                            blocked = True
+                            break
+                    if blocked:
+                        break
+                if not blocked:
+                    score += 18.0 + (6 - row) * 8.0
             else:
-                black += 1
-        return float((white - black) * 2)
+                for check_row in range(row + 1, 8):
+                    for check_file in adjacent_files:
+                        if board.squares[check_row * 8 + check_file] == "P":
+                            blocked = True
+                            break
+                    if blocked:
+                        break
+                if not blocked:
+                    score -= 18.0 + (row - 1) * 8.0
+        return score
+
+    def _rook_file_bonus(self, board: Board) -> float:
+        score = 0.0
+        for square, piece in enumerate(board.squares):
+            if piece not in ("R", "r"):
+                continue
+            file_index = square % 8
+            white_pawn = False
+            black_pawn = False
+            for rank in range(8):
+                occupant = board.squares[rank * 8 + file_index]
+                if occupant == "P":
+                    white_pawn = True
+                elif occupant == "p":
+                    black_pawn = True
+            if piece == "R":
+                if not white_pawn and not black_pawn:
+                    score += 24.0
+                elif not white_pawn:
+                    score += 12.0
+            else:
+                if not white_pawn and not black_pawn:
+                    score -= 24.0
+                elif not black_pawn:
+                    score -= 12.0
+        return score
+
+    def _endgame_king_activity_bonus(self, board: Board, white_material: float, black_material: float) -> float:
+        heavy_material = white_material + black_material
+        if heavy_material > 2600:
+            return 0.0
+
+        white_row, white_col = divmod(board.white_king_pos, 8)
+        black_row, black_col = divmod(board.black_king_pos, 8)
+        white_center_distance = abs(white_row - 3.5) + abs(white_col - 3.5)
+        black_center_distance = abs(black_row - 3.5) + abs(black_col - 3.5)
+        return (black_center_distance - white_center_distance) * 8.0
