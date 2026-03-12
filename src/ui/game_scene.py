@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 from shutil import which
 from typing import Callable
@@ -15,6 +16,8 @@ from src.engine.search import SearchEngine, SearchResult
 from src.ui.board_renderer import BoardLayout, BoardRenderer, PromotionOverlayState, promotion_option_rects
 from src.ui.input_handler import InputHandler, MoveResolution
 from src.ui.theme import Theme
+
+MATE_SCORE_CP = 100000
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,9 @@ class GameScene:
         self.theme = theme
         self.renderer = BoardRenderer(theme)
 
+    def set_screen(self, screen: pygame.Surface) -> None:
+        self.screen = screen
+
     def configure_mode(self, mode: str) -> None:
         self.mode = mode
         self.human_side = WHITE
@@ -109,6 +115,7 @@ class GameScene:
             board=self.board,
             input_state=self.input_handler.state,
             status_text=self.status_text(),
+            review_text=self.review_summary(),
             detail_lines=self.detail_lines(),
             engine_lines=self.engine_lines(),
             review_badge=self.review_badge(),
@@ -215,10 +222,9 @@ class GameScene:
     def detail_lines(self) -> list[str]:
         side = "White" if self.board.side_to_move == WHITE else "Black"
         lines = [
-            f"Mode: {'Human vs Engine' if self.mode == 'engine' else 'Local pass-and-play'}",
-            f"Side to move: {side}",
-            f"Moves available: {len(self.legal_moves)}",
-            f"Last move: {self.last_move().uci() if self.last_move() else '--'}",
+            f"{'Human vs Engine' if self.mode == 'engine' else 'Local pass-and-play'}",
+            f"{side} to move",
+            f"{len(self.legal_moves)} legal moves  |  Last: {self.last_move().uci() if self.last_move() else '--'}",
         ]
         if self.result.is_over:
             lines.append(f"Result: {self.result.headline}")
@@ -251,6 +257,19 @@ class GameScene:
             return None
         return self.last_review.label
 
+    def review_summary(self) -> str:
+        if self.last_review is None:
+            return "Review will appear here after each move. Best line, score swing, and move quality stay visible while you play."
+
+        best_move = self.last_review.best_move or "--"
+        played_cp = self.last_review.played_score.as_centipawns()
+        best_cp = self.last_review.best_score.as_centipawns()
+        return (
+            f"{self.last_review.label.title()}  |  Played {self.last_review.played_move}  |  "
+            f"Best {best_move}  |  Loss {self.last_review.loss_cp} cp  |  "
+            f"Eval {played_cp / 100:.2f} vs {best_cp / 100:.2f}"
+        )
+
     def move_rows(self) -> list[str]:
         rows: list[str] = []
         history = self.board.history
@@ -272,7 +291,7 @@ class GameScene:
 
     def _move_history_rect(self) -> pygame.Rect:
         panel_x, panel_y, panel_width, _ = self.theme.side_panel_rect
-        return pygame.Rect(panel_x + 16, panel_y + 486, panel_width - 32, 76)
+        return pygame.Rect(panel_x + 16, panel_y + 436, panel_width - 32, 124)
 
     def _snap_scroll_to_latest(self) -> None:
         row_count = len(self.move_rows())
@@ -286,30 +305,59 @@ class GameScene:
         self.engine_snapshot = self.engine.iterative_deepening(self.board, max_depth=2)
 
     def _review_move(self, board_before: Board, move: Move) -> MoveReview | None:
+        config = AppConfig()
+        review_depth = max(10, config.stockfish_depth)
+        fallback_depth = 3
         stockfish_path = AppConfig().stockfish_path
         if which(stockfish_path) or Path(stockfish_path).exists():
             try:
                 with StockfishBridge(path=stockfish_path) as bridge:
-                    return bridge.review_move(board_before, move, depth=8)
+                    return bridge.review_move(board_before, move, depth=review_depth)
             except Exception:
                 pass
 
-        best_result = self.engine.iterative_deepening(board_before, max_depth=2)
+        best_result = self.engine.iterative_deepening(board_before, max_depth=fallback_depth)
         child_board = Board(board_before.to_fen())
         child_board.make_move(move)
-        played_result = self.engine.iterative_deepening(child_board, max_depth=1)
-        best_score = int(best_result.score if best_result.best_move is not None else 0)
-        played_score = int(-played_result.score)
+        played_result = self.engine.iterative_deepening(child_board, max_depth=max(2, fallback_depth - 1))
+        best_score = self._normalize_review_score(best_result.score if best_result.best_move is not None else 0.0)
+        played_score = self._normalize_review_score(-played_result.score)
         loss_cp = max(0, best_score - played_score)
         best_move = best_result.best_move.uci() if best_result.best_move is not None else None
+        best_margin_cp = self._fallback_best_margin(board_before, best_move)
         return MoveReview(
             played_move=move.uci(),
             best_move=best_move,
             played_score=Score(cp=played_score),
             best_score=Score(cp=best_score),
             loss_cp=loss_cp,
-            label=classify_move_loss(loss_cp, move.uci(), best_move),
+            label=classify_move_loss(loss_cp, move.uci(), best_move, best_margin_cp=best_margin_cp),
         )
+
+    def _normalize_review_score(self, score: float) -> int:
+        if not isfinite(score):
+            return MATE_SCORE_CP if score > 0 else -MATE_SCORE_CP
+        return int(max(-MATE_SCORE_CP, min(MATE_SCORE_CP, score)))
+
+    def _fallback_best_margin(self, board_before: Board, best_move: str | None) -> int | None:
+        if best_move is None:
+            return None
+
+        best_score: int | None = None
+        runner_up_score: int | None = None
+        for candidate in generate_legal_moves(board_before):
+            child_board = Board(board_before.to_fen())
+            child_board.make_move(candidate)
+            candidate_score = self._normalize_review_score(-self.engine.iterative_deepening(child_board, max_depth=1).score)
+            if candidate.uci() == best_move:
+                best_score = candidate_score
+                continue
+            if runner_up_score is None or candidate_score > runner_up_score:
+                runner_up_score = candidate_score
+
+        if best_score is None or runner_up_score is None:
+            return None
+        return max(0, best_score - runner_up_score)
 
     def captured_pieces(self) -> tuple[list[str], list[str]]:
         captured_by_white: list[str] = []

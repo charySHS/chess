@@ -27,6 +27,7 @@ _load_dotenv()
 @dataclass(frozen=True)
 class AppConfig:
     theme_name: str = getenv("NEWCHESS_THEME", "glass")
+    ui_backend: str = getenv("NEWCHESS_UI_BACKEND", "pygame")
     stockfish_path: str = getenv("NEWCHESS_STOCKFISH_PATH", "stockfish")
     stockfish_depth: int = int(getenv("NEWCHESS_STOCKFISH_DEPTH", "12"))
     model_path: Path = Path(getenv("NEWCHESS_MODEL_PATH", "artifacts/value_network.npz"))

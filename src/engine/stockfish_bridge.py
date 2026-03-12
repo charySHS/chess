@@ -132,6 +132,7 @@ class StockfishBridge:
         before_fen = board_before.to_fen()
         best_analysis = self.analyse_fen(before_fen, depth=depth, multipv=2)
         best_line = best_analysis.best_line
+        runner_up = best_analysis.lines[1] if len(best_analysis.lines) > 1 else None
 
         played_board = Board(before_fen)
         played_board.make_move(move)
@@ -142,7 +143,10 @@ class StockfishBridge:
         played_score = Score(cp=-played_reply_score.as_centipawns())
         loss_cp = max(0, best_score.as_centipawns() - played_score.as_centipawns())
         best_move = best_line.pv[0] if best_line is not None and best_line.pv else None
-        label = classify_move_loss(loss_cp, move.uci(), best_move)
+        best_margin_cp = None
+        if runner_up is not None:
+            best_margin_cp = max(0, best_score.as_centipawns() - runner_up.score.as_centipawns())
+        label = classify_move_loss(loss_cp, move.uci(), best_move, best_margin_cp=best_margin_cp)
         return MoveReview(
             played_move=move.uci(),
             best_move=best_move,
@@ -183,17 +187,22 @@ class StockfishBridge:
         return EngineLine(multipv=multipv, score=score, pv=pv)
 
 
-def classify_move_loss(loss_cp: int, played_move: str, best_move: str | None) -> str:
-    if best_move is not None and played_move == best_move:
+def classify_move_loss(
+    loss_cp: int,
+    played_move: str,
+    best_move: str | None,
+    *,
+    best_margin_cp: int | None = None,
+) -> str:
+    exact_best = best_move is not None and played_move == best_move
+    if exact_best and (best_margin_cp is None or best_margin_cp >= 35):
         return "best"
-    if loss_cp <= 10:
-        return "brilliant"
-    if loss_cp <= 35:
+    if loss_cp <= 12:
         return "great"
-    if loss_cp <= 70:
+    if loss_cp <= 38:
         return "good"
-    if loss_cp <= 90:
+    if loss_cp <= 95:
         return "inaccuracy"
-    if loss_cp <= 220:
+    if loss_cp <= 180:
         return "mistake"
     return "blunder"
